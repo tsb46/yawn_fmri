@@ -1,6 +1,7 @@
 """
 Utilities for extracting features from raw physio signals
 """
+
 from typing import Tuple
 
 import mne
@@ -11,6 +12,7 @@ import scipy
 from neurokit2.rsp.rsp_rvt import _rsp_rvt_find_min
 
 from scan.preprocess.custom import framewise_displacement
+
 
 def extract_eog_blink(ts: np.ndarray, sf: int) -> dict[str, np.ndarray]:
     """
@@ -32,9 +34,7 @@ def extract_eog_blink(ts: np.ndarray, sf: int) -> dict[str, np.ndarray]:
     eog_blink = "EOG_Rate"
     # extract respiration amplitude and frequency
     eog_signals, _ = np.asarray(nk.eog_process(ts, sampling_rate=sf))
-    return {
-        'eog_blink': eog_signals[eog_blink].values
-    }
+    return {"eog_blink": eog_signals[eog_blink].values}
 
 
 def extract_emg_amplitude(ts: np.ndarray, sf: int) -> dict[str, np.ndarray]:
@@ -58,12 +58,12 @@ def extract_emg_amplitude(ts: np.ndarray, sf: int) -> dict[str, np.ndarray]:
     ts_complex = scipy.signal.hilbert(ts_filt)
     ts_amp = np.abs(ts_complex)
 
-    return {
-        'emg_amp': ts_amp
-    }
+    return {"emg_amp": ts_amp}
 
 
-def extract_motion(motion_params: dict[str, np.ndarray], sf: int | None = None) -> dict[str, np.ndarray]:
+def extract_motion(
+    motion_params: dict[str, np.ndarray], sf: int | None = None
+) -> dict[str, np.ndarray]:
     """
     Extract motion parameters from motion parameters dictionary
 
@@ -83,10 +83,10 @@ def extract_motion(motion_params: dict[str, np.ndarray], sf: int | None = None) 
     fd = framewise_displacement(motion_params)
     # extract motion parameters most relevant to breathing behaviors
     motion_params_extract = {
-        'fd': fd,
-        'pitch': np.rad2deg(motion_params['pitch']),
-        'trans_z': motion_params['trans_z'],
-        'trans_y': motion_params['trans_y'],
+        "fd": fd,
+        "pitch": np.rad2deg(motion_params["pitch"]),
+        "trans_z": motion_params["trans_z"],
+        "trans_y": motion_params["trans_y"],
     }
     return motion_params_extract
 
@@ -116,8 +116,8 @@ def extract_resp_rvt(ts: np.ndarray, sf: int) -> dict[str, np.ndarray]:
     # extract respiration amplitude and frequency
     rvt, phase = rsp_rvt_harrison(np.asarray(ts_clean), sf)
     return {
-        'resp_amp': rvt,
-        'resp_rate': phase,
+        "resp_amp": rvt,
+        "resp_rate": phase,
     }
 
 
@@ -141,14 +141,11 @@ def extract_sample_weight(ts: np.ndarray, sf: int) -> dict[str, np.ndarray]:
     ts: dict[str, np.ndarray]
         respiratory amplitude signal
     """
-    return {
-        'weight': ts
-    }
+    return {"weight": ts}
+
 
 def extract_eeg_vigilance(
-    eeg_data: np.ndarray,
-    sf_eeg: int,
-    window_sec: float = 2
+    eeg_data: np.ndarray, sf_eeg: int, window_sec: float = 2
 ) -> dict[str, np.ndarray]:
     """
     Window-based computation of vigilance index from eeg data. Computed as
@@ -189,16 +186,14 @@ def extract_eeg_vigilance(
     # compute vigilance index
     vigilance = alpha_power_avg / theta_power_avg
     return {
-        'alpha_power': alpha_power_avg,
-        'theta_power': theta_power_avg,
-        'eeg_vigilance': vigilance
+        "alpha_power": alpha_power_avg,
+        "theta_power": theta_power_avg,
+        "eeg_vigilance": vigilance,
     }
 
+
 def _wavelet_power(
-    data: np.ndarray,
-    sf: int,
-    frequency_band: Tuple[float, float],
-    precision: int = 20
+    data: np.ndarray, sf: int, frequency_band: Tuple[float, float], precision: int = 20
 ) -> np.ndarray:
     """
     Compute wavelet power of data in a given frequency band.
@@ -308,9 +303,13 @@ def rsp_rvt_harrison(
                 n_end = n_end[-1].squeeze()
 
             # Linearly interpolate from n_start to n_end
-            fr_phase[n_start:n_end] = np.linspace(fr_min, fr_max, num=n_end - n_start).squeeze() # type: ignore
+            fr_phase[n_start:n_end] = np.linspace(
+                fr_min, fr_max, num=n_end - n_start
+            ).squeeze()  # type: ignore
         # Filter out any high frequencies from phase-only signal
-        fr_filt = scipy.signal.sosfiltfilt(d, np.pad(np.cos(fr_phase), n_pad, "symmetric"))
+        fr_filt = scipy.signal.sosfiltfilt(
+            d, np.pad(np.cos(fr_phase), n_pad, "symmetric")
+        )
         fr_filt = fr_filt[n_pad : (len(fr_filt) - n_pad)]
     # Keep phase only signal as reference
     fr_filt = np.cos(fr_phase)
@@ -340,4 +339,3 @@ def rsp_rvt_harrison(
     fr_if = np.clip(fr_if, boundaries[1], boundaries[0])
 
     return fr_rv, fr_phase
-

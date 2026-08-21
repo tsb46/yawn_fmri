@@ -46,7 +46,7 @@ def physio_func_map(
     """
     physio_func_dict = {}
     for p in signal_labels:
-        if p.startswith("eog") or p.startswith("emg"):
+        if p.startswith(("eog", "emg")):
             func = physio.extract_emg_amplitude
             # fstring for potentially multiple channels
             output_map = {"emg_amp": f"{p}_amp"}
@@ -656,7 +656,7 @@ class Pipeline:
 
     def __init__(
         self,
-        dataset: Literal["vanderbilt", "newcastle"],
+        dataset: Literal["vanderbilt"],
         anat_skip: bool = False,
         func_skip: bool = False,
         reconall_skip: bool = False,
@@ -722,6 +722,7 @@ class Pipeline:
                 anat_proc.run()
             # loop through sessions and preprocess functionals and physio
             for ses in ses_list:
+                print(f"Preprocessing subject {subj}, session {ses}")
                 if not self.func_skip:
                     if self.func_pipe_type == "full":
                         # preprocess functional
@@ -993,64 +994,106 @@ class FunctionalPipelineFull:
                 ],
             )
 
-        # # coregistration of mean functional to T1w with Freesurfer BBRegister
-        # fs.surf_register(
-        #     fp_reg_out = self.fmap['func'][self.subj][self.ses][FuncPipeOut.MISC.value][FuncPipeOutMisc.SURFREGISTER_REG.value],
-        #     fp_mat_out = self.fmap['func'][self.subj][self.ses][FuncPipeOut.MISC.value][FuncPipeOutMisc.SURFREGISTER_MAT.value],
-        #     fp_fslmat_out = self.fmap['func'][self.subj][self.ses][FuncPipeOut.MISC.value][FuncPipeOutMisc.SURFREGISTER_FSL_MAT.value],
-        #     func_mean = self.fmap['func'][self.subj][self.ses][FuncPipeOut.MISC.value][FuncPipeOutMisc.MEAN_VOL.value],
-        #     subj=self.subj,
-        #     subjects_dir=self.fmap['anat'][self.subj][AnatPipeOut.FREESURFER.value]
-        # )
+        # coregistration of mean functional to T1w with Freesurfer BBRegister
+        fs.surf_register(
+            fp_reg_out=self.fmap["func"][self.subj][self.ses][FuncPipeOut.MISC.value][
+                FuncPipeOutMisc.SURFREGISTER_REG.value
+            ],
+            fp_mat_out=self.fmap["func"][self.subj][self.ses][FuncPipeOut.MISC.value][
+                FuncPipeOutMisc.SURFREGISTER_MAT.value
+            ],
+            fp_fslmat_out=self.fmap["func"][self.subj][self.ses][
+                FuncPipeOut.MISC.value
+            ][FuncPipeOutMisc.SURFREGISTER_FSL_MAT.value],
+            func_mean=self.fmap["func"][self.subj][self.ses][FuncPipeOut.MISC.value][
+                FuncPipeOutMisc.MEAN_VOL.value
+            ],
+            subj=self.subj,
+            subjects_dir=self.fmap["anat"][self.subj][AnatPipeOut.FREESURFER.value],
+        )
 
-        # # if multiecho, run tedana pipeline
-        # if self.multiecho:
-        #     # create binary brain mask from Freesurfer in functional space
-        #     fs.mask_to_func(
-        #         mask = self.fmap['anat'][self.subj][AnatPipeOut.MISC.value][AnatPipeOutMisc.FS_BRAINMASK.value],
-        #         func_mean = self.fmap['func'][self.subj][self.ses][FuncPipeOut.MISC.value][FuncPipeOutMisc.MEAN_VOL.value],
-        #         mask_out = self.fmap['func'][self.subj][self.ses][FuncPipeOut.MISC.value][FuncPipeOutMisc.FS_FUNC_MASK.value],
-        #         mat_lta = self.fmap['func'][self.subj][self.ses][FuncPipeOut.MISC.value][FuncPipeOutMisc.SURFREGISTER_MAT.value]
-        #     )
-        #     # run tedana workflow
-        #     tedana_prefix = os.path.basename(
-        #         self.fmap['func'][self.subj][self.ses][FuncPipeOut.TEDANA.value]
-        #     )
-        #     tedana_denoise(
-        #         fps_in = self.fmap['func'][self.subj][self.ses][FuncPipeOut.MOTION_CORRECT.value],
-        #         echo_times = self.func_params['echos'],
-        #         mask = self.fmap['func'][self.subj][self.ses][FuncPipeOut.MISC.value][FuncPipeOutMisc.FS_FUNC_MASK.value],
-        #         out_dir = self.fmap['func'][self.subj][self.ses][FuncPipeOut.TEDANA.value],
-        #         out_prefix = tedana_prefix
-        #     )
-        #     fp_vol2surf = self.fmap['func'][self.subj][self.ses][FuncPipeOut.MISC.value][FuncPipeOutMisc.TEDANA_DENOISED.value]
-        # else:
-        #     fp_vol2surf = self.fmap['func'][self.subj][self.ses][FuncPipeOut.MOTION_CORRECT.value]
+        # if multiecho, run tedana pipeline
+        if self.multiecho:
+            # create binary brain mask from Freesurfer in functional space
+            fs.mask_to_func(
+                mask=self.fmap["anat"][self.subj][AnatPipeOut.MISC.value][
+                    AnatPipeOutMisc.FS_BRAINMASK.value
+                ],
+                func_mean=self.fmap["func"][self.subj][self.ses][
+                    FuncPipeOut.MISC.value
+                ][FuncPipeOutMisc.MEAN_VOL.value],
+                mask_out=self.fmap["func"][self.subj][self.ses][FuncPipeOut.MISC.value][
+                    FuncPipeOutMisc.FS_FUNC_MASK.value
+                ],
+                mat_lta=self.fmap["func"][self.subj][self.ses][FuncPipeOut.MISC.value][
+                    FuncPipeOutMisc.SURFREGISTER_MAT.value
+                ],
+            )
+            # run tedana workflow
+            tedana_prefix = os.path.basename(
+                self.fmap["func"][self.subj][self.ses][FuncPipeOut.TEDANA.value]
+            )
+            tedana_denoise(
+                fps_in=self.fmap["func"][self.subj][self.ses][
+                    FuncPipeOut.MOTION_CORRECT.value
+                ],
+                echo_times=self.func_params["echos"],
+                mask=self.fmap["func"][self.subj][self.ses][FuncPipeOut.MISC.value][
+                    FuncPipeOutMisc.FS_FUNC_MASK.value
+                ],
+                out_dir=self.fmap["func"][self.subj][self.ses][
+                    FuncPipeOut.TEDANA.value
+                ],
+                out_prefix=tedana_prefix,
+            )
+            fp_vol2surf = self.fmap["func"][self.subj][self.ses][
+                FuncPipeOut.MISC.value
+            ][FuncPipeOutMisc.TEDANA_DENOISED.value]
+        else:
+            fp_vol2surf = self.fmap["func"][self.subj][self.ses][
+                FuncPipeOut.MOTION_CORRECT.value
+            ]
 
-        # # from here on, we process separate hemispheres (lh, rh)
-        # for hemi in ['lh', 'rh']:
-        #     # from volume to native (subject) surface with Freesurfer
-        #     # mri_vol2surf, additionaly performs surface-smoothing
-        #     fs.vol2surf(
-        #         hemi = hemi, # type: ignore
-        #         smooth_fwhm = self.func_params['smooth_fwhm'],
-        #         fp_in = fp_vol2surf,
-        #         fp_out =self.fmap['func'][self.subj][self.ses][FuncPipeOut.VOL2SURF.value][hemi],
-        #         subj=self.subj,
-        #         subjects_dir=self.fmap['anat'][self.subj][AnatPipeOut.FREESURFER.value],
-        #         fp_reg_mat = self.fmap['func'][self.subj][self.ses][FuncPipeOut.MISC.value][FuncPipeOutMisc.SURFREGISTER_MAT.value]
-        #     )
-        #     # freesurfer native surface to fs_LR surface with
-        #     # workbench metric-resample
-        #     wb.fs2fslr(
-        #         hemi = hemi,
-        #         fp_in = self.fmap['func'][self.subj][self.ses][FuncPipeOut.VOL2SURF.value][hemi],
-        #         fp_out =self.fmap['func'][self.subj][self.ses][FuncPipeOut.FSLR_RESAMPLE.value][hemi],
-        #         fs_mid = self.fmap['anat'][self.subj][AnatPipeOut.MISC.value][f'fs_mid_{hemi}'],
-        #         lr_mid = self.fmap['anat'][self.subj][AnatPipeOut.MISC.value][f'fslr_mid_{hemi}'],
-        #         fs_sphere = self.fmap['anat'][self.subj][AnatPipeOut.MISC.value][f'fs_sphere_{hemi}'],
-        #         fs_subj_dir = self.fmap['anat'][self.subj][AnatPipeOut.FREESURFER_SDIR.value]
-        #     )
+        # from here on, we process separate hemispheres (lh, rh)
+        for hemi in ["lh", "rh"]:
+            # from volume to native (subject) surface with Freesurfer
+            # mri_vol2surf, additionaly performs surface-smoothing
+            fs.vol2surf(
+                hemi=hemi,  # type: ignore
+                smooth_fwhm=self.func_params["smooth_fwhm"],
+                fp_in=fp_vol2surf,
+                fp_out=self.fmap["func"][self.subj][self.ses][
+                    FuncPipeOut.VOL2SURF.value
+                ][hemi],
+                subj=self.subj,
+                subjects_dir=self.fmap["anat"][self.subj][AnatPipeOut.FREESURFER.value],
+                fp_reg_mat=self.fmap["func"][self.subj][self.ses][
+                    FuncPipeOut.MISC.value
+                ][FuncPipeOutMisc.SURFREGISTER_MAT.value],
+            )
+            # freesurfer native surface to fs_LR surface with
+            # workbench metric-resample
+            wb.fs2fslr(
+                hemi=hemi,
+                fp_in=self.fmap["func"][self.subj][self.ses][
+                    FuncPipeOut.VOL2SURF.value
+                ][hemi],
+                fp_out=self.fmap["func"][self.subj][self.ses][
+                    FuncPipeOut.FSLR_RESAMPLE.value
+                ][hemi],
+                fs_mid=self.fmap["anat"][self.subj][AnatPipeOut.MISC.value][
+                    f"fs_mid_{hemi}"
+                ],
+                lr_mid=self.fmap["anat"][self.subj][AnatPipeOut.MISC.value][
+                    f"fslr_mid_{hemi}"
+                ],
+                fs_sphere=self.fmap["anat"][self.subj][AnatPipeOut.MISC.value][
+                    f"fs_sphere_{hemi}"
+                ],
+                fs_subj_dir=self.fmap["anat"][self.subj][
+                    AnatPipeOut.FREESURFER_SDIR.value
+                ],
+            )
 
 
 class FunctionalPipelineCiftiPartial:
@@ -1284,11 +1327,9 @@ class PhysioPipeline:
                 physio_fp=self.fmap["physio"][self.subj][self.ses]["raw"]["physio"],
                 eeg_fp=self.fmap["physio"][self.subj][self.ses]["raw"]["eeg"],
             )
-        elif self.dataset == "newcastle":
-            signals, sf = ds.load_physio_newcastle(
-                physio_fp=self.fmap["physio"][self.subj][self.ses]["raw"]["physio"],
-                blink_fp=self.fmap["physio"][self.subj][self.ses]["raw"]["blink"],
-                saccade_fp=self.fmap["physio"][self.subj][self.ses]["raw"]["saccade"],
+        else:
+            raise ValueError(
+                f"{self.dataset} is not a valid dataset for physio preprocessing"
             )
         # if motion signals are present, load fsl motion parameters
         if "motion" in self.params["physio"]["signals"]:

@@ -83,42 +83,5 @@
         "weight": ["detrend", "lowpass"]
       }
     }
-  },
-  "newcastle": {
-    "data": ["func", "physio"],
-    "file_format": {
-      "func": "sub-{subject}_task-PA2ndNEWSCLIPPREP2DBOLDMB6BLOCK1_dir-PA_space-fsLR_den-91k_bold.{ext}",
-      "physio": {
-        "raw": {
-          "blink": "sub-{subject}_task-PA2ndNEWSCLIPPREP2DBOLDMB6BLOCK1_dir-PA_blinks.{ext}",
-          "saccade": "sub-{subject}_task-PA2ndNEWSCLIPPREP2DBOLDMB6BLOCK1_dir-PA_saccades.{ext}",
-          "physio": "sub-{subject}_task-PA2ndNEWSCLIPPREP2DBOLDMB6BLOCK1_dir-PA_physio.{ext}"
-        },
-        "out": "sub-{subject}_task-PA2ndNEWSCLIPPREP2DBOLDMB6BLOCK1_dir-PA-{physio}.{ext}"
-      }
-    },
-    "physio_ext": {
-      "blink": "csv",
-      "saccade": "csv",
-      "physio": "tsv.gz"
-    },
-    "directory": {
-      "func": "data/newcastle/func",
-      "physio": "data/newcastle/physio"
-    },
-    "multiecho": false,
-    "func": {
-      "pipeline": "cifti-partial",
-      "smooth_fwhm": 5.0,
-      "tr": 0.82,
-      "trim": 12
-    },
-    "physio": {
-      "raw": ["blink", "saccade", "physio"],
-      "signals": ["resp"],
-      "out": {
-        "resp": ["resp_amp", "resp_rate"]
-      }
-    }
   }
 }

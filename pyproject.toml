@@ -23,6 +23,9 @@ dependencies = [
 [project.optional-dependencies]
 viz = [
     "imageio-ffmpeg",
+    "mne-qt-browser>=0.7.5",
+    "pyqtgraph>=0.14.0",
+    "pyside6>=6.11.1",
 ]
 templates = [
     "neuromaps>=0.0.6",

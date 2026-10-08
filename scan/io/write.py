@@ -3,14 +3,13 @@ Module for writing analysis results to func.gii.
 """
 
 import os
-
 from typing import Literal
 
 import nibabel as nb
 import numpy as np
 from nibabel.gifti.gifti import (
-    GiftiImage,
     GiftiDataArray,
+    GiftiImage,
     GiftiLabel,
     GiftiLabelTable,
 )

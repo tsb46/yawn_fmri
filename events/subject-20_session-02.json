@@ -1,0 +1,25 @@
+{
+    "source_name": "subject-20_session-02",
+    "markers": [
+        {
+            "sample_index": 1597,
+            "time_seconds": 159.70000000000002,
+            "label": "Yawn"
+        },
+        {
+            "sample_index": 3826,
+            "time_seconds": 382.6,
+            "label": "Yawn"
+        },
+        {
+            "sample_index": 4882,
+            "time_seconds": 488.20000000000005,
+            "label": "Sigh"
+        },
+        {
+            "sample_index": 11482,
+            "time_seconds": 1148.2,
+            "label": "Yawn"
+        }
+    ]
+}

@@ -27,6 +27,23 @@ Movie encoding uses `ffmpeg`. The script first tries a system `ffmpeg`, then fal
 uv sync --extra viz
 ```
 
+The same `viz` extra also enables interactive time-series plots via Plotly. The new `plot_timeseries` helper accepts either a 2D NumPy array plus column labels or a pandas DataFrame, defaults to vertically stacked synchronized subplots, and can switch to an overlaid WebGL view when needed.
+
+The same extra now also includes a small Dash-based annotation workflow for manual marking and JSON export. The app reuses the Plotly timecourse figure, lets you click to add vertical markers, and saves a per-session JSON payload containing the sample index, time in seconds, and signal values for each marker. A minimal launch pattern looks like this:
+```
+from scan.plots.timecourse_dash import create_timecourse_annotation_app
+
+app = create_timecourse_annotation_app(
+	data,
+	column_labels=[...],
+	source_name="subject-01",
+	labels=["A", "B", "C"],
+)
+app.run(debug=True)
+```
+
+When labels are provided, the app shows a label selector and saves the chosen label on each marker in the same JSON file.
+
 # Command-Line Usage
 The current analysis entry point is `main.py`. To view the available arguments, run:
 ```

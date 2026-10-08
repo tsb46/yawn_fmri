@@ -22,10 +22,9 @@ dependencies = [
 
 [project.optional-dependencies]
 viz = [
+    "dash>=2.17",
     "imageio-ffmpeg",
-    "mne-qt-browser>=0.7.5",
-    "pyqtgraph>=0.14.0",
-    "pyside6>=6.11.1",
+    "plotly>=5.24",
 ]
 templates = [
     "neuromaps>=0.0.6",

@@ -1,6 +1,5 @@
 """FSL (V6.0.5) command line utilities"""
 
-
 import os
 from typing import List
 
@@ -12,7 +11,7 @@ from nipype.interfaces import fsl
 from scan import utils
 
 # Ensure output is .nii.gz
-fsl.FSLCommand.set_default_output_type('NIFTI_GZ')
+fsl.FSLCommand.set_default_output_type("NIFTI_GZ")
 
 
 def bet(fp: str, fp_out: str, frac: float | None = None) -> None:
@@ -41,7 +40,7 @@ def load_fsl_motion_params(fp: str) -> dict[str, np.ndarray]:
 
     Returns
     -------
-        dict of np.ndarray motion parameters: 
+        dict of np.ndarray motion parameters:
             {
                 'pitch': np.ndarray,
                 'roll': np.ndarray,
@@ -52,22 +51,32 @@ def load_fsl_motion_params(fp: str) -> dict[str, np.ndarray]:
             }
 
     FSL saves motion parameters in the following order:
-        rx  Pitch               (rad)
-        ry  Roll                (rad)
-        rz  Yaw                 (rad)
-        x   Right-Left          (mm)
-        y   Anterior-Posterior  (mm)
-        z   Superior-Inferior   (mm)
+        rx  Pitch  (rad)
+        ry  Roll   (rad)
+        rz  Yaw    (rad)
+        x, y, z    (mm)
+
+    Values are the transform that realigns each volume to the reference
+    (the inverse of head motion). Verified with simulated head movements
+    on LAS-stored data (voxel axes point Left, Anterior, Superior); positive
+    values correspond to this head motion:
+        pitch   nose up (chin up)
+        roll    top of head tilts to the left
+        yaw     nose turns to the right
+        trans_x head moves right
+        trans_y head moves posterior
+        trans_z head moves inferior
+    Signs may differ for other image orientations.
 
     """
     motion = np.loadtxt(fp)
     motion_params = {
-        'pitch': motion[:, 0],
-        'roll': motion[:, 1],
-        'yaw': motion[:, 2],
-        'trans_x': motion[:, 3],
-        'trans_y': motion[:, 4],
-        'trans_z': motion[:, 5]
+        "pitch": motion[:, 0],
+        "roll": motion[:, 1],
+        "yaw": motion[:, 2],
+        "trans_x": motion[:, 3],
+        "trans_y": motion[:, 4],
+        "trans_z": motion[:, 5],
     }
     return motion_params
 
@@ -99,10 +108,7 @@ def mcflirt(fp: str, fp_out: str) -> None:
 
 
 def mcflirt_multiecho(
-    fps: List[str],
-    fps_out: List[str],
-    fp_meanvol: str,
-    fp_mat: str
+    fps: List[str], fps_out: List[str], fp_meanvol: str, fp_mat: str
 ) -> None:
     """
     McFLIRT Motion Correction for multiple echos. Apply motion
@@ -126,12 +132,10 @@ def mcflirt_multiecho(
     # apply mcflirt transform to rest of echos
     for fp, fp_out in zip(fps[1:], fps_out[1:]):
         # applyxfm4d is not available in nipype, run from terminal
-        os.system(
-            f'applyxfm4D {fp} {fp_meanvol} {fp_out} {fp_mat} -fourdigit'
-        )
+        os.system(f"applyxfm4D {fp} {fp_meanvol} {fp_out} {fp_mat} -fourdigit")
 
 
-def slicetime(fp: str, fp_out: str, slice_order:str, tr: float) -> None:
+def slicetime(fp: str, fp_out: str, slice_order: str, tr: float) -> None:
     """
     Slice time correction with SliceTimer
 
@@ -145,20 +149,14 @@ def slicetime(fp: str, fp_out: str, slice_order:str, tr: float) -> None:
             repetition time
 
     """
-    slicetimer = fsl.SliceTimer(
-        custom_order=slice_order,
-        time_repetition=tr
-    )
+    slicetimer = fsl.SliceTimer(custom_order=slice_order, time_repetition=tr)
     slicetimer.inputs.in_file = fp
     slicetimer.inputs.out_file = fp_out
     slicetimer.run()
 
 
 def slicetime_multiecho(
-    fps: List[str],
-    fps_out: str,
-    slice_order: str,
-    tr: float
+    fps: List[str], fps_out: str, slice_order: str, tr: float
 ) -> None:
     """
     Slice time correction with SliceTimer for multiecho datasets
@@ -192,7 +190,7 @@ def trim_vol(fp: str, fp_out: str, n_trim: int) -> None:
     if n_trim >= 0:
         trim = fsl.ExtractROI(t_min=n_trim, t_size=-1)
     else:
-        n_end = nb.load(fp).shape[-1] # type: ignore
+        n_end = nb.load(fp).shape[-1]  # type: ignore
         n_end -= abs(n_trim)
         trim = fsl.ExtractROI(t_min=0, t_size=n_end)
     trim.inputs.in_file = fp
@@ -200,11 +198,7 @@ def trim_vol(fp: str, fp_out: str, n_trim: int) -> None:
     trim.run()
 
 
-def trim_vol_multiecho(
-    fps: List[str],
-    fps_out: List[str],
-    n_trim: int
-) -> None:
+def trim_vol_multiecho(fps: List[str], fps_out: List[str], n_trim: int) -> None:
     """
     Trim first (+) or last (-) N volumes with ExtractROI for mulitecho
     datasets
@@ -221,4 +215,3 @@ def trim_vol_multiecho(
     # loop through echos
     for fp, fp_out in zip(fps, fps_out):
         trim_vol(fp, fp_out, n_trim)
-

@@ -4,19 +4,18 @@ Utilities for extracting features from raw physio signals
 
 from typing import Tuple
 
-import mne
 import neurokit2 as nk
 import numpy as np
 import scipy
-
 from neurokit2.rsp.rsp_rvt import _rsp_rvt_find_min
+from scipy.ndimage import gaussian_filter1d
 
 from scan.preprocess.custom import framewise_displacement
 
 
-def extract_eog_blink(ts: np.ndarray, sf: int) -> dict[str, np.ndarray]:
+def extract_eog_features(ts: np.ndarray, sf: int) -> dict[str, np.ndarray]:
     """
-    Extract blink rate from eog signals
+    Extract EOG features from raw EOG signal
 
     Parameters
     ----------
@@ -27,41 +26,54 @@ def extract_eog_blink(ts: np.ndarray, sf: int) -> dict[str, np.ndarray]:
 
     Returns
     -------
-    eog_blink: dict[str, np.ndarray]
-        eog blink rate
+    eog_features: dict[str, np.ndarray]
+        extracted EOG features
     """
-    # resp amplitude label
-    eog_blink = "EOG_Rate"
-    # extract respiration amplitude and frequency
-    eog_signals, _ = np.asarray(nk.eog_process(ts, sampling_rate=sf))
-    return {"eog_blink": eog_signals[eog_blink].values}
+    # bandpass filters
+    ts_hf = nk.signal.signal_filter(ts, sampling_rate=sf, lowcut=20, highcut=100)
+
+    # Hilbert amplitude
+    ts_hf_amp = np.abs(scipy.signal.hilbert(ts_hf))
+
+    # smoothing
+    ts_hf_amp = _smooth(ts_hf_amp, sf, sigma_sec=0.05)
+
+    # normalization
+    ts_hf_amp = _robust_z(ts_hf_amp)
+
+    return {"eog_hf_amp": ts_hf_amp}
 
 
-def extract_emg_amplitude(ts: np.ndarray, sf: int) -> dict[str, np.ndarray]:
+def extract_emg_features(ts: np.ndarray, sf: int) -> dict[str, np.ndarray]:
     """
-    Extract electromyography or electrocorticography amplitude signals
+    Extract EMG features from raw EMG signal
 
     Parameters
     ----------
     ts: np.ndarray
-        time series of raw emg signal
+        time series of raw electromyography (emg) signal
     sf: int
         sampling frequency
 
     Returns
     -------
-    emg_amp: dict[str, np.ndarray]
-        emg amplitude signal
+    emg_features: dict[str, np.ndarray]
+        extracted EMG features - amplitude, slope, and peak
     """
-    # extract emg amplitude
-    ts_filt = nk.signal_filter(ts, sampling_rate=sf, lowcut=10, highcut=30)
-    ts_complex = scipy.signal.hilbert(ts_filt)
-    ts_amp = np.abs(ts_complex)
+    ts_filt = nk.signal.signal_filter(ts, sampling_rate=sf, lowcut=20, highcut=100)
 
-    return {"emg_amp": ts_amp}
+    ts_amp = np.abs(scipy.signal.hilbert(ts_filt))
+
+    # smoothing
+    ts_amp = _smooth(ts_amp, sf, sigma_sec=0.05)
+
+    # normalization
+    ts_amp = _robust_z(ts_amp)
+
+    return {"emg_hf_amp": ts_amp}
 
 
-def extract_motion(
+def extract_motion_features(
     motion_params: dict[str, np.ndarray], sf: int | None = None
 ) -> dict[str, np.ndarray]:
     """
@@ -79,22 +91,28 @@ def extract_motion(
     motion_params_extract: dict[str, np.ndarray]
         motion parameters
     """
-    # extract framewise displacement
+
+    # detrend motion parameters
+    for key, signal in motion_params.items():
+        motion_params[key] = nk.signal.signal_detrend(signal, order=3)
+
     fd = framewise_displacement(motion_params)
-    # extract motion parameters most relevant to breathing behaviors
-    motion_params_extract = {
+
+    return {
         "fd": fd,
         "pitch": np.rad2deg(motion_params["pitch"]),
+        "roll": np.rad2deg(motion_params["roll"]),
+        "yaw": np.rad2deg(motion_params["yaw"]),
+        "trans_x": motion_params["trans_x"],
         "trans_z": motion_params["trans_z"],
         "trans_y": motion_params["trans_y"],
     }
-    return motion_params_extract
 
 
-def extract_resp_rvt(ts: np.ndarray, sf: int) -> dict[str, np.ndarray]:
+def extract_resp_features(ts: np.ndarray, sf: int) -> dict[str, np.ndarray]:
     """
-    Extract respiratory amplitude and rate by method of Harrison et al. (2021)
-    https://doi.org/10.1016/j.neuroimage.2021.117787
+    Extract respiratory features via the method of Harrison et al. (2021)
+    https://doi.org/10.1016/j.neuroimage.2021.117787.
 
     Parameters
     ----------
@@ -105,19 +123,20 @@ def extract_resp_rvt(ts: np.ndarray, sf: int) -> dict[str, np.ndarray]:
 
     Returns
     -------
-    resp_amp: dict[str, np.ndarray]
-        respiratory amplitude and rate signals
+    resp_features: dict[str, np.ndarray]
+        respiratory amplitude, rate, instantaneous frequency signals
     """
-    # Clean raw respiratory signal
-    ts_clean = nk.rsp_clean(
-        ts,
-        sampling_rate=sf,
-    )
-    # extract respiration amplitude and frequency
-    rvt, phase = rsp_rvt_harrison(np.asarray(ts_clean), sf)
+    ts_clean = nk.rsp.rsp_clean(ts, sampling_rate=sf)
+
+    rsp_amp, _, rsp_if = rsp_rvt_harrison(np.asarray(ts_clean), sf)
+
+    # normalize features
+    rsp_amp = _robust_z(rsp_amp)
+
     return {
-        "resp_amp": rvt,
-        "resp_rate": phase,
+        "resp_filt": np.asarray(ts_clean),
+        "resp_amp": rsp_amp,
+        "resp_if": rsp_if,
     }
 
 
@@ -126,7 +145,7 @@ def extract_sample_weight(ts: np.ndarray, sf: int) -> dict[str, np.ndarray]:
     Return sample weights for weighting of individual time points in later
     regression analyses. This is needed due to known drop-out issues in some
     recordings (e.g. vanderbilt respiratory recordings). This function
-    performs no transformation on the signal (i.e. an identity transform)
+    performs no transformation on the signal, but simply returns the input signal as a dictionary
     for consistency with the API.
 
     Parameters
@@ -139,92 +158,9 @@ def extract_sample_weight(ts: np.ndarray, sf: int) -> dict[str, np.ndarray]:
     Returns
     -------
     ts: dict[str, np.ndarray]
-        respiratory amplitude signal
+        sample weight signal
     """
     return {"weight": ts}
-
-
-def extract_eeg_vigilance(
-    eeg_data: np.ndarray, sf_eeg: int, window_sec: float = 2
-) -> dict[str, np.ndarray]:
-    """
-    Window-based computation of vigilance index from eeg data. Computed as
-    the ratio of the power in the Alpha (8-12 Hz) band to the power in the
-    Theta (4-7 Hz) band. Returns alpha and theta power with vigilance signal.
-
-    Parameters
-    ----------
-        eeg_data: np.ndarray
-            eeg data (time x channel)
-        sf_eeg: int
-            sampling frequency of eeg data
-        window_sec: float
-            window size in seconds
-
-    Returns
-    -------
-    vigilance: dict[str, np.ndarray]
-        vigilance index (ratio of alpha and theta), alpha and theta power
-    """
-    # define alpha and theta bands
-    alpha_band = (8, 12)
-    theta_band = (4, 7)
-    # compute power in alpha and theta bands
-    alpha_power = _wavelet_power(
-        eeg_data,
-        sf_eeg,
-        alpha_band,
-    )
-    theta_power = _wavelet_power(
-        eeg_data,
-        sf_eeg,
-        theta_band,
-    )
-    # average across channels
-    alpha_power_avg = np.mean(alpha_power, axis=0)
-    theta_power_avg = np.mean(theta_power, axis=0)
-    # compute vigilance index
-    vigilance = alpha_power_avg / theta_power_avg
-    return {
-        "alpha_power": alpha_power_avg,
-        "theta_power": theta_power_avg,
-        "eeg_vigilance": vigilance,
-    }
-
-
-def _wavelet_power(
-    data: np.ndarray, sf: int, frequency_band: Tuple[float, float], precision: int = 20
-) -> np.ndarray:
-    """
-    Compute wavelet power of data in a given frequency band.
-
-    Parameters
-    ----------
-        data: np.ndarray
-            data (time x channel)
-        sf: int
-            sampling frequency
-        frequency_band: Tuple[float, float]
-            frequency band
-        precision: int
-            precision of frequency resolution
-
-    Returns
-    -------
-    power: np.ndarray
-        power of data in given frequency band (channel x time x frequency)
-    """
-    power = mne.time_frequency.tfr_array_morlet(
-        # transpose to channel x time and add singleton dimension for epochs
-        data.T[np.newaxis, ...],
-        sfreq=sf,
-        freqs=np.linspace(frequency_band[0], frequency_band[1], precision),
-        output="power",
-    )
-    power = np.squeeze(power)
-    # average across frequencies
-    power = np.mean(power, axis=1)
-    return power
 
 
 def rsp_rvt_harrison(
@@ -233,7 +169,7 @@ def rsp_rvt_harrison(
     boundaries: Tuple[float, float] = (2.0, 1 / 30),
     iterations: int = 10,
     silent: bool = False,
-) -> Tuple[np.ndarray, np.ndarray]:
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Slight modification of the NeuroKit2 (v0.2.11) RVT function to return
     the amplitude and phase of the respiratory signal.
@@ -259,6 +195,8 @@ def rsp_rvt_harrison(
         respiratory volume per time
     phase: np.ndarray
         respiratory phase
+    ifreq: np.ndarray
+        instantaneous frequency
     """
     # low-pass filter at not too far above breathing-rate to remove high-frequency noise
     n_pad = int(np.ceil(10 * sf))
@@ -273,6 +211,9 @@ def rsp_rvt_harrison(
     fr_filt = fr_lp
     fr_mag = abs(scipy.signal.hilbert(fr_filt))
 
+    # initialize phase as the angle of the analytic signal
+    fr_phase = np.unwrap(np.angle(scipy.signal.hilbert(fr_filt)))
+
     for _ in range(iterations):
         # analytic signal to phase
         fr_phase = np.unwrap(np.angle(scipy.signal.hilbert(fr_filt)))
@@ -286,6 +227,7 @@ def rsp_rvt_harrison(
             # Find value of `fr_phase` at max and min:
             fr_max = fr_phase[n_max].squeeze()
             n_min, fr_min = _rsp_rvt_find_min(increase_inds, fr_phase, n_max, silent)
+
             if n_min is None:
                 # There is no finishing point to the interpolation at the very end
                 continue
@@ -304,8 +246,10 @@ def rsp_rvt_harrison(
 
             # Linearly interpolate from n_start to n_end
             fr_phase[n_start:n_end] = np.linspace(
-                fr_min, fr_max, num=n_end - n_start
-            ).squeeze()  # type: ignore
+                fr_min,  # type: ignore
+                fr_max,
+                num=n_end - n_start,  # type: ignore
+            ).squeeze()
         # Filter out any high frequencies from phase-only signal
         fr_filt = scipy.signal.sosfiltfilt(
             d, np.pad(np.cos(fr_phase), n_pad, "symmetric")
@@ -338,4 +282,21 @@ def rsp_rvt_harrison(
     # remove in-human patterns, since both limits are in Hertz, the upper_limit is lower
     fr_if = np.clip(fr_if, boundaries[1], boundaries[0])
 
-    return fr_rv, fr_phase
+    return fr_rv, fr_phase, fr_if
+
+
+def _robust_z(x: np.ndarray) -> np.ndarray:
+    """
+    Compute robust z-score of a signal using median and median absolute deviation.
+    """
+    med = np.median(x)
+    mad = np.median(np.abs(x - med)) + 1e-8
+    return (x - med) / mad
+
+
+def _smooth(x: np.ndarray, sf: int, sigma_sec: float) -> np.ndarray:
+    """
+    Smooth a signal using a Gaussian filter.
+    """
+    sigma = sigma_sec * sf
+    return gaussian_filter1d(x, sigma=sigma)

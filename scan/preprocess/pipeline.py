@@ -1,85 +1,27 @@
 """
-Pipeline module for preprocessing anatomical, functional, EEG and physio
+Pipeline module for preprocessing anatomical, functional and physio
 datasets.
 """
 
 import json
 import os
-
 from enum import Enum
 from multiprocessing import Pool
 from typing import List, Literal, Tuple
 
 import matplotlib.pyplot as plt
 import neurokit2 as nk
-import nibabel as nb
 import numpy as np
-import pandas as pd
 from tedana.workflows import tedana_workflow
 
+from scan import utils
 from scan.io.file import Participant
 from scan.preprocess import dataset as ds
-from scan.preprocess import fsl
 from scan.preprocess import freesurfer as fs
-from scan.preprocess import physio
+from scan.preprocess import fsl, physio
 from scan.preprocess import workbench as wb
 from scan.preprocess.custom import trim_cifti
 from scan.preprocess.fsl import load_fsl_motion_params
-from scan import utils
-
-
-def physio_func_map(
-    signal_labels: list[str],
-) -> dict:
-    """
-    Create a dictionary of physio function mappings.
-
-    Parameters
-    ----------
-    signal_labels: list[str]
-        list of signal labels
-
-    Returns
-    -------
-    physio_func_dict: dict
-        dictionary of physio function mappings and their output label mappings
-    """
-    physio_func_dict = {}
-    for p in signal_labels:
-        if p.startswith(("eog", "emg")):
-            func = physio.extract_emg_amplitude
-            # fstring for potentially multiple channels
-            output_map = {"emg_amp": f"{p}_amp"}
-        elif p.startswith("resp"):
-            func = physio.extract_resp_rvt
-            output_map = {
-                "resp_amp": "resp_amp",
-                "resp_rate": "resp_rate",
-            }
-        elif p.startswith("weight"):
-            func = physio.extract_sample_weight
-            output_map = {"weight": "weight"}
-        elif p.startswith("eeg"):
-            func = physio.extract_eeg_vigilance
-            output_map = {
-                "eeg_vigilance": "eeg_vigilance",
-                "theta_power": "theta_power",
-                "alpha_power": "alpha_power",
-            }
-        elif p.startswith("motion"):
-            func = physio.extract_motion
-            output_map = {
-                "fd": "framewise_displacement",
-                "pitch": "pitch",
-                "trans_z": "trans_z",
-                "trans_y": "trans_y",
-            }
-        else:
-            raise ValueError(f"Invalid signal type: {p}")
-
-        physio_func_dict[p] = {"func": func, "output_map": output_map}
-
-    return physio_func_dict
 
 
 class AnatPipeOutMisc(Enum):
@@ -156,6 +98,64 @@ class PhysioPipeOut(Enum):
     SIGNAL = "signal"
 
 
+def physio_func_map(
+    signal_labels: list[str],
+) -> dict:
+    """
+    Create a dictionary of physio function mappings.
+
+    Parameters
+    ----------
+    signal_labels: list[str]
+        list of signal labels
+
+    Returns
+    -------
+    physio_func_dict: dict
+        dictionary of physio function mappings and their output label mappings
+    """
+    physio_func_dict = {}
+    for p in signal_labels:
+        if p.startswith("eog"):
+            func = physio.extract_eog_features
+            output_map = {"eog_hf_amp": f"{p}_hf_amp"}
+        elif p.startswith("emg"):
+            func = physio.extract_emg_features
+            # fstring for potentially multiple channels
+            output_map = {
+                "emg_hf_amp": f"{p}_hf_amp",
+            }
+        elif p.startswith("resp"):
+            func = physio.extract_resp_features
+            output_map = {
+                "resp_amp": f"{p}_amp",
+                "resp_phase": f"{p}_phase",
+                "resp_if": f"{p}_if",
+                "resp_inhale_mask": f"{p}_inhale_mask",
+                "resp_filt": f"{p}_filt",
+            }
+        elif p.startswith("weight"):
+            func = physio.extract_sample_weight
+            output_map = {"weight": "weight"}
+        elif p.startswith("motion"):
+            func = physio.extract_motion_features
+            output_map = {
+                "fd": "fd",
+                "pitch": "pitch",
+                "roll": "roll",
+                "yaw": "yaw",
+                "trans_x": "trans_x",
+                "trans_z": "trans_z",
+                "trans_y": "trans_y",
+            }
+        else:
+            raise ValueError(f"Invalid signal type: {p}")
+
+        physio_func_dict[p] = {"func": func, "output_map": output_map}
+
+    return physio_func_dict
+
+
 class FileMapper:
     """
     Utility class for mapping input and output files for
@@ -176,7 +176,7 @@ class FileMapper:
     """
 
     # get participant iterator
-    def __init__(self, dataset: Literal["vanderbilt", "newcastle"], params: dict):
+    def __init__(self, dataset: Literal["vanderbilt"], params: dict):
         self.dataset = dataset
         self.params = params
         # initialize participant iterator
@@ -606,6 +606,8 @@ class FileMapper:
                     file_ext="txt",
                     physio_type="out",
                 )
+            else:
+                raise ValueError(f"{physio_type} is not a valid physio type")
             # get full path
             fp = os.path.abspath(fp)
         else:
@@ -1167,17 +1169,15 @@ class FunctionalPipelineCiftiPartial:
 
 class PhysioPipeline:
     """
-    Physio (including EEG) preprocessing pipeline for a single scan.
+    Physio (including EOG/EMG) preprocessing pipeline for a single scan.
 
     Steps of the preprocessing depend on the dataset and the physio
     signals recorded, but in general:
 
-    1. Load physio signals (and EEG) - dataset-specific
+    1. Load physio signals (and EEG)
     2. Extract physio signal features - e.g. respiratory amplitude
     3. Trim physio signals to match trimming of functional volumes
-    4. Detrending (polynomial order 2 - quadratic) - except for eeg_vigilance
-    5. Low-pass filter (<0.20 Hz) - except for weight
-    6. Interpolation to functional MRI volumes
+    4. Resample to 10 Hz.
 
     Attributes
     ----------
@@ -1203,7 +1203,7 @@ class PhysioPipeline:
         Execute physio preprocessing pipeline
     """
 
-    STEPS = ["trim", "detrend", "lowpass", "resample"]
+    STEPS = ("trim", "resample")
 
     def __init__(
         self,
@@ -1222,8 +1222,6 @@ class PhysioPipeline:
         self.plot_physio = plot_physio
         # calculate # of secs to trim off physio to match functional mri trim
         self.trim = params["func"]["tr"] * params["func"]["trim"]
-        # calculate interpolation time points to sample physio to functional
-        self.func_t = self._calc_frame_times()
         # create physio function mapping
         self.physio_func_map = physio_func_map(self.params["physio"]["signals"])
 
@@ -1234,11 +1232,15 @@ class PhysioPipeline:
         # load physio
         signals, sf = self._load_physio()
         # perform physio preprocessing
+        p_out = {}
         for p in self.params["physio"]["signals"]:
             # extract physio signal features from raw physio signals
             signals_extract = self._physio_extract(signals[p], sf[p], p)
             # account for trimming of functional volumes
-            trim_n = int(sf[p] * self.trim)
+            if p == "motion":
+                trim_n = self.params["func"]["trim"]
+            else:
+                trim_n = round(sf[p] * self.trim)
             # loop over extracted physio signal features
             for physio_out, signal in signals_extract.items():
                 pipeline_steps = self._set_pipeline_steps(physio_out)
@@ -1248,77 +1250,40 @@ class PhysioPipeline:
                 else:
                     signal_proc = signal
 
-                # polynomial (2nd order) detrending
-                if pipeline_steps["detrend"]:
-                    signal_proc = nk.signal_detrend(
-                        signal_proc, method="polynomial", order=2
-                    )
-                # low-pass filtering
-                if pipeline_steps["lowpass"]:
-                    signal_proc = nk.signal_filter(
-                        signal_proc, sampling_rate=sf[p], highcut=0.20, order=5
-                    )
-                # resampling via cubic interpolation to functional scan volumes
-                # for signals other than weight, signal should be low-passed
+                # resampling via FFT to 10 Hz (if specified in params)
                 if pipeline_steps["resample"]:
-                    # set interpolation method to 'nearest' for sample weight
-                    if physio_out == "weight":
-                        # if sample weights, use nearest-neighbour interpolation
-                        interp_method = "nearest"
-                    else:
-                        interp_method = "cubic"
                     # resample physio
-                    signal_proc = self._resample_physio(
-                        signal_proc, sf[p], interp_method=interp_method
+                    signal_proc = nk.signal.signal_resample(
+                        signal_proc,
+                        sampling_rate=sf[p],
+                        desired_sampling_rate=10,
+                        method="FFT",
+                    )
+                if physio_out == "weight":
+                    assert isinstance(signal_proc, np.ndarray)  # satisfy type checker
+                    # if weight, convert back to binary via thresholding at 0.5
+                    signal_proc = (signal_proc > 0.5).astype(int)
+                    unique_vals = np.unique(signal_proc)
+                    # check that weight signal is binary
+                    assert np.isin(unique_vals, [0, 1]).all(), (
+                        f"weight signal is not binary: {unique_vals}"
                     )
                 # save out physio in .txt format
                 np.savetxt(
                     self.fmap["physio"][self.subj][self.ses]["proc"][physio_out],
-                    signal_proc,
+                    np.array(signal_proc),
                 )
+                p_out[physio_out] = signal_proc
 
-    def _calc_frame_times(self) -> np.ndarray:
-        """
-        Calculate interpolation time points from physio to functional samples.
-        FSL slicetimer aligns all functional slices to the middle of the
-        TR (0.5 * TR), so time points should be selected with this in mind.
-
-        Returns
-        -------
-        frame_times: np.ndarray
-            time points (from the start of the functional scan) of preprocessed
-            functional volumes to interpolate physio signals to
-
-        """
-        # get functional TR
-        func_tr = self.params["func"]["tr"]
-        # load preprocessed functional scan to get number of volumes
-        if self.params["func"]["pipeline"] == "full":
-            gii_lh = nb.load(  # type: ignore
-                self.fmap["func"][self.subj][self.ses]["surface_lr"]["lh"]
-            )
-            func_len = len(gii_lh.darrays)  # type: ignore
-        elif self.params["func"]["pipeline"] == "cifti-partial":
-            cifti = nb.load(  # type: ignore
-                self.fmap["func"][self.subj][self.ses]["surface_smooth"]
-            )
-            # get number of volumes (assumes time is the first dimension)
-            func_len = cifti.shape[0]  # type: ignore
-        # calculate interpolation time points
-        frame_times = func_tr * (np.arange(func_len) + 0.5)
-        # round to two decimal points
-        frame_times = np.round(frame_times, 2)
-        return frame_times
-
-    def _load_physio(self) -> Tuple[dict[str, pd.Series], dict[str, int]]:
+    def _load_physio(self) -> Tuple[dict[str, np.ndarray], dict[str, float]]:
         """
         load physio signals (dataset-specific)
 
         Returns
         -------
-        signals: dict[str, pd.Series]
+        signals: dict[str, np.ndarray]
             physio signals
-        sf: dict[str, int]
+        sf: dict[str, float]
             sampling frequency of physio signals
         """
         # get physio loader
@@ -1364,10 +1329,10 @@ class PhysioPipeline:
                 plt.savefig(fp)
                 plt.close()
 
-        return signals, sf  # type: ignore
+        return signals, sf
 
     def _physio_extract(
-        self, signal: pd.Series, sf: float, physio_str: str
+        self, signal: np.ndarray, sf: float, physio_str: str
     ) -> dict[str, np.ndarray]:
         """
         Perform physio preprocessing
@@ -1390,7 +1355,6 @@ class PhysioPipeline:
         physio_func_info = self.physio_func_map[physio_str]
         # extract physio signal(s)
         signal_extract = physio_func_info["func"](signal, sf)
-
         # map extracted signals to output labels
         signal_extract_out = {}
         for physio_out in self.params["physio"]["out"][physio_str]:
@@ -1400,43 +1364,6 @@ class PhysioPipeline:
                     signal_extract_out[physio_out] = signal_extract[internal_key]
                     break
         return signal_extract_out
-
-    def _resample_physio(
-        self,
-        signal: np.ndarray,
-        sf: float,
-        interp_method: Literal["cubic", "nearest"] = "cubic",
-    ) -> np.ndarray:
-        """
-        Resample preprocessed physio signals to functional scan volumes using
-        cubic or nearest neighbor interpolation to the self.func_t (functional times)
-        attribute. For physio recordings, signals should be first low-pass
-        filtered (< 0.2 Hz).
-
-        Parameters
-        ----------
-        signal: np.ndarray
-            physio signals
-        sf: float
-            sampling frequency of physio signal
-        interp_method
-            interpolation method for interpolating physio data to functional
-            volume samples - use 'nearest' for weights resampling. Otherwise, 'cubic'.
-
-        Returns
-        -------
-        signal_resamp: np.ndarray
-            physio signal resampled to functional volumes
-        """
-        # dont filter sample weights
-        if interp_method not in ["cubic", "nearest"]:
-            raise ValueError("interp method must be cubic or nearest")
-        # get signal time points
-        signal_t = np.arange(len(signal)) * (1 / sf)
-        signal_resamp = nk.signal_interpolate(
-            x_values=signal_t, y_values=signal, x_new=self.func_t, method=interp_method
-        )
-        return signal_resamp
 
     def _set_pipeline_steps(self, p: str) -> dict[str, bool]:
         """

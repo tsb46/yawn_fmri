@@ -1,6 +1,7 @@
 {
   "vanderbilt": {
     "data": ["anat", "func", "physio"],
+    "event_dir": "events",
     "file_format": {
       "func": {
         "echo": "vcon{subject}-scan{session}_ecr_e{echo}.{ext}",
@@ -52,35 +53,42 @@
         "emg3", 
         "resp", 
         "weight", 
-        "eeg",
         "motion"
       ],
       "out": {
-        "eog1": ["eog1_amp"],
-        "eog2": ["eog2_amp"], 
-        "emg1": ["emg1_amp"], 
-        "emg2": ["emg2_amp"], 
-        "emg3": ["emg3_amp"], 
+        "eog1": [
+          "eog1_hf_amp"
+        ],
+        "eog2": [
+          "eog2_hf_amp"
+        ],
+        "emg1": ["emg1_hf_amp"], 
+        "emg2": ["emg2_hf_amp"], 
+        "emg3": ["emg3_hf_amp"], 
         "resp": [
+          "resp_filt",
           "resp_amp",
-          "resp_rate"
+          "resp_if"
         ], 
-        "weight": ["weight"], 
-        "eeg": ["eeg_vigilance", "theta_power", "alpha_power"],
+        "weight": ["weight"],
         "motion": [
-          "framewise_displacement", 
+          "fd",
           "pitch",
+          "roll",
+          "yaw",
+          "trans_x",
           "trans_z",
           "trans_y"
         ]
       },
       "pipeline_skip": {
-        "framewise_displacement": ["trim", "resample"],
+        "fd": ["trim", "resample"],
         "pitch": ["trim", "resample"],
+        "roll": ["trim", "resample"],
+        "yaw": ["trim", "resample"],
+        "trans_x": ["trim", "resample"],
         "trans_z": ["trim", "resample"],
-        "trans_y": ["trim", "resample"],
-        "eeg_vigilance": ["detrend"],
-        "weight": ["detrend", "lowpass"]
+        "trans_y": ["trim", "resample"]
       }
     }
   }

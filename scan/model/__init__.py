@@ -4,18 +4,20 @@ physio signals and functional MRI signals.
 """
 
 from scan.model import glm
-
-from scan.model.glm import DistributedLagModel
-from scan.model.glm import MultivariateDistributedLagModel
-from scan.model.complex_pca import ComplexPCA
 from scan.model.fc import FCMapModel
-from scan.model.fc import FCInteractionModel
+from scan.model.glm import (
+    GLMSpline,
+    GLMSplineResults,
+    HRFBasis,
+)
+
+DistributedLagModel = GLMSpline
 
 __all__ = [
-    "glm",
     "DistributedLagModel",
-    "MultivariateDistributedLagModel",
-    "ComplexPCA",
     "FCMapModel",
-    "FCInteractionModel",
+    "GLMSpline",
+    "GLMSplineResults",
+    "HRFBasis",
+    "glm",
 ]

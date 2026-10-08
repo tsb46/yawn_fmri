@@ -2,16 +2,11 @@
 Dataset-specific utilities for loading and preprocessing physio/EEG data
 """
 
-import json
-import os
 from typing import Tuple
 
 import neurokit2 as nk
 import numpy as np
-import pandas as pd
-
 from scipy.io import loadmat
-
 
 VANDERBILT_EEG_CHAN_LABELS = ["P3", "P4", "P7", "P8", "Pz", "O1", "O2", "Oz"]
 
@@ -149,14 +144,16 @@ def _biopac_load_vanderbilt(physio: dict) -> Tuple[np.ndarray, float]:
     resp = signals[:, fields.index(resp_field)]
     # get mr trigger
     mr_trigger = signals[:, fields.index(trigger_field)]
-    # identify first and last trigger (threshold of 0.05 works)
-    triggers = np.where(mr_trigger > 0.05)[0]
+    # identify trigger onsets (threshold of 0.05 works)
+    triggers = np.flatnonzero(np.diff(np.r_[0.0, (mr_trigger > 0.05).astype(int)]) == 1)
     first_trigger, last_trigger = triggers[0], triggers[-1]
-    # crop respiratory signal based on MR triggers
-    resp_crop = resp[first_trigger:last_trigger]
+    # the final trigger marks the start of the last TR, so keep one trigger
+    # interval past the last onset to preserve the full scan duration.
+    trigger_step = round(np.median(np.diff(triggers)))
+    resp_crop = resp[first_trigger : min(last_trigger + trigger_step, len(resp))]
     # resample to 200 Hz
     sf_new = 200
-    resp_resample = nk.signal_resample(
+    resp_resample = nk.signal.signal_resample(
         resp_crop, sampling_rate=sf, desired_sampling_rate=sf_new
     )
     return np.asarray(resp_resample), sf_new

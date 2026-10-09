@@ -3,15 +3,10 @@
 import os
 from typing import Literal
 
-
 import nipype.interfaces.workbench as wb
 
 
-def cifti_smooth(
-    fp_in: str,
-    fp_out: str,
-    fwhm: float
-) -> None:
+def cifti_smooth(fp_in: str, fp_out: str, fwhm: float) -> None:
     """
     Smooth CIFTI file using wb_command -cifti-smoothing
 
@@ -25,15 +20,15 @@ def cifti_smooth(
             FWHM of the Gaussian kernel in mm
     """
     # template prefix
-    template_prefix = 'template/fsaverage'
+    template_prefix = "template/fsaverage"
 
     # convert fwhm to sigma (standard deviation)
     sigma = fwhm / 2.3548
     cifti_smooth = wb.CiftiSmooth()
     cifti_smooth.inputs.in_file = fp_in
-    cifti_smooth.inputs.direction = 'COLUMN'
-    cifti_smooth.inputs.left_surf = f'{template_prefix}.L.inflated.32k_fs_LR.surf.gii'
-    cifti_smooth.inputs.right_surf = f'{template_prefix}.R.inflated.32k_fs_LR.surf.gii'
+    cifti_smooth.inputs.direction = "COLUMN"
+    cifti_smooth.inputs.left_surf = f"{template_prefix}.L.inflated.32k_fs_LR.surf.gii"
+    cifti_smooth.inputs.right_surf = f"{template_prefix}.R.inflated.32k_fs_LR.surf.gii"
     cifti_smooth.inputs.sigma_surf = sigma
     cifti_smooth.inputs.sigma_vol = sigma
     cifti_smooth.inputs.out_file = fp_out
@@ -41,11 +36,11 @@ def cifti_smooth(
 
 
 def create_midthickness(
-    hemi: Literal['rh', 'lh'],
+    hemi: Literal["rh", "lh"],
     fs_mid: str,
     lr_mid: str,
     sphere_out: str,
-    fs_subj_dir:  str
+    fs_subj_dir: str,
 ) -> None:
     """
     Create midthickness files from Freesurfer subject recon-all outputs
@@ -68,19 +63,19 @@ def create_midthickness(
             filepath to subject freesurfer recon-all outputs
     """
     # create midthickness (mid) for left and right hemispheres
-    template_prefix = 'template/fs_LR-deformed_to-fsaverage'
-    if hemi == 'lh':
-        hemi_lr = 'L'
-    elif hemi == 'rh':
-        hemi_lr = 'R'
+    template_prefix = "template/fs_LR-deformed_to-fsaverage"
+    if hemi == "lh":
+        hemi_lr = "L"
+    elif hemi == "rh":
+        hemi_lr = "R"
     else:
         raise ValueError(f'param hemi must be "lh" or "rh", not {hemi}')
 
     # get file paths to surfaces
-    fs_white = f'{fs_subj_dir}/surf/{hemi}.white'
-    fs_pial = f'{fs_subj_dir}/surf/{hemi}.pial'
-    fs_sphere =  f'{fs_subj_dir}/surf/{hemi}.sphere.reg'
-    lr_sphere = f'{template_prefix}.{hemi_lr}.sphere.32k_fs_LR.surf.gii'
+    fs_white = f"{fs_subj_dir}/surf/{hemi}.white"
+    fs_pial = f"{fs_subj_dir}/surf/{hemi}.pial"
+    fs_sphere = f"{fs_subj_dir}/surf/{hemi}.sphere.reg"
+    lr_sphere = f"{template_prefix}.{hemi_lr}.sphere.32k_fs_LR.surf.gii"
 
     # execute command
     os.system(f"""
@@ -89,15 +84,15 @@ def create_midthickness(
         {fs_mid} {lr_mid} {sphere_out}
     """)
 
+
 def fs2fslr(
     hemi: str,
     fp_in: str,
     fp_out: str,
     fs_mid: str,
     lr_mid: str,
-    fs_subj_dir:  str,
+    fs_subj_dir: str,
     fs_sphere: str,
-
 ) -> None:
     """
     Resample functional .gii file to the fs_LR mesh using workbench metric-resample.
@@ -122,21 +117,21 @@ def fs2fslr(
 
     """
     # create midthickness (mid) for left and right hemispheres
-    template_prefix = 'template/fs_LR-deformed_to-fsaverage'
-    if hemi == 'lh':
-        hemi_lr = 'L'
-        wb_label = 'CORTEX_LEFT'
-    elif hemi == 'rh':
-        hemi_lr = 'R'
-        wb_label = 'CORTEX_RIGHT'
+    template_prefix = "template/fs_LR-deformed_to-fsaverage"
+    if hemi == "lh":
+        hemi_lr = "L"
+        wb_label = "CORTEX_LEFT"
+    elif hemi == "rh":
+        hemi_lr = "R"
+        wb_label = "CORTEX_RIGHT"
     else:
         raise ValueError(f'param hemi must be "lh" or "rh", not {hemi}')
 
     metres = wb.MetricResample()
     metres.inputs.in_file = fp_in
-    metres.inputs.method = 'ADAP_BARY_AREA'
+    metres.inputs.method = "ADAP_BARY_AREA"
     metres.inputs.current_sphere = fs_sphere
-    metres.inputs.new_sphere = f'{template_prefix}.{hemi_lr}.sphere.32k_fs_LR.surf.gii'
+    metres.inputs.new_sphere = f"{template_prefix}.{hemi_lr}.sphere.32k_fs_LR.surf.gii"
     metres.inputs.current_area = fs_mid
     metres.inputs.new_area = lr_mid
     metres.inputs.area_surfs = True
@@ -147,5 +142,3 @@ def fs2fslr(
     os.system(f"""
     wb_command -set-structure  {fp_out} {wb_label}
     """)
-
-

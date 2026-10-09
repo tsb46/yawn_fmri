@@ -6,17 +6,50 @@ eeg and physio.
 import json
 import os
 import warnings
+from dataclasses import dataclass
+from typing import Dict, List, Literal, Tuple
 
-from typing import Literal, List, Tuple, Dict
-
+import neurokit2 as nk
 import nibabel as nb
 import numpy as np
+from sklearn.linear_model import LinearRegression
 
-from scan.io.file import Participant
 from scan.io import utils
+from scan.io.file import Participant
 
 LH_MEDIAL_WALL_MASK = "template/fsLR_hemi-L_den-32k_desc-nomedialwall_dparc.label.gii"
 RH_MEDIAL_WALL_MASK = "template/fsLR_hemi-R_den-32k_desc-nomedialwall_dparc.label.gii"
+
+
+# Dataset output
+@dataclass
+class DatasetOutput:
+    func: List[np.ndarray]
+    physio: Dict[str, List[np.ndarray]]
+    sigh_events: List[List[float]]
+    yawn_events: List[List[float]]
+
+    def concatenate(self) -> "DatasetOutputConcat":
+        """
+        Concatenate the lists of arrays in the DatasetOutput into single arrays.
+        """
+        concatenated_output = DatasetOutputConcat(
+            func=np.concatenate(self.func, axis=0),
+            physio={
+                key: np.concatenate(value, axis=0) for key, value in self.physio.items()
+            },
+            sigh_events=[item for sublist in self.sigh_events for item in sublist],
+            yawn_events=[item for sublist in self.yawn_events for item in sublist],
+        )
+        return concatenated_output
+
+
+@dataclass
+class DatasetOutputConcat:
+    func: np.ndarray
+    physio: Dict[str, np.ndarray]
+    sigh_events: List[float]
+    yawn_events: List[float]
 
 
 class Gifti:
@@ -53,6 +86,14 @@ class Gifti:
         else:
             self.mask_lh = np.ones(self.gii_lh.darrays[0].data.shape[0], dtype=bool)  # type: ignore
             self.mask_rh = np.ones(self.gii_rh.darrays[0].data.shape[0], dtype=bool)  # type: ignore
+
+        _n_samples_lh = len(self.gii_lh.darrays)  # type: ignore
+        _n_samples_rh = len(self.gii_rh.darrays)  # type: ignore
+        if _n_samples_lh != _n_samples_rh:
+            raise ValueError(
+                "left and right hemispheres should have same number of samples"
+            )
+        self.n_samples = _n_samples_lh
 
         self.split_indx = self.gii_lh.darrays[0].data[self.mask_lh].shape[0]  # type: ignore
         # get # of vertices per hemisphere
@@ -130,9 +171,10 @@ class DatasetLoad:
     ----------
     dataset: Literal['vanderbilt']
         dataset label
-    subj_filt: List[str] |
-        list of subject labels or (subject, session) labels pairs
-        (in a tuple) to exclude from load
+    subj_ses_select: List[Tuple[str, str]] | None
+        list of subject and session label pairs to load. If None, load all
+        subjects and sessions in the dataset (default: None). For subjects with
+        only one session, pass as a tuple with the session as None (e.g. ('01', None))
     physio_dir:
         physio directory name for preprocessing output. Should be
         'proc1_physio' (default: 'proc1_physio')
@@ -154,12 +196,12 @@ class DatasetLoad:
     def __init__(
         self,
         dataset: Literal["vanderbilt"],
-        subj_filt: List[str] | List[Tuple[str, str]] | None = None,
+        subj_ses_select: List[Tuple[str, str]] | None = None,
         physio_dir: str = "proc1_physio",  # last output of physio pipeline
         func_dir: str = "proc6_surfacelr",  # last output of func pipeline
     ):
         self.dataset = dataset
-        self.subj_filt = subj_filt
+        self.subj_ses_select = subj_ses_select
         # get dataset parameters
         # get data formatting
         with open("scan/meta/params.json", "rb") as f:
@@ -168,25 +210,29 @@ class DatasetLoad:
         self.func_dir = f"{self.params['directory']['func']}/{func_dir}"
         self.physio_dir = f"{self.params['directory']['physio']}/{physio_dir}"
         # get scan iterator
-        self.iter = Participant(dataset)
+        self.iter = Participant(dataset, subj_ses_select=subj_ses_select)
         # check if multiple sessions per subject
         self.session_flag = "session" in self.iter.fields
 
     def load(
         self,
-        data_type: Tuple[str, str] | Tuple[str] | str = ("func", "physio"),
-        concat: bool = True,
+        data_type: Tuple[Literal["func", "physio"], ...] | Literal["func", "physio"] = (
+            "func",
+            "physio",
+        ),
         verbose: bool = True,
-        norm: Literal["zscore", "demean", None] = "zscore",
+        norm: Literal["zscore", "demean", "robust_z"] | None = "zscore",
+        resample_physio: bool = True,
         func_low_pass: bool = False,
         func_high_pass: bool = False,
         physio_low_pass: bool = False,
         physio_high_pass: bool = False,
+        regress_global_signal: bool = False,
         input_mask: bool = False,
         lh_roi_masks: List[str] | None = None,
         rh_roi_masks: List[str] | None = None,
         roi_avg_left_right: bool = False,
-    ) -> Tuple[dict, Gifti]:
+    ) -> Tuple[DatasetOutput, Gifti | None]:
         """
         Iteratively load scan data and concatenate for group
         analysis (optional). Data can be functional (gii) or physio, or both.
@@ -201,19 +247,19 @@ class DatasetLoad:
 
         Parameters
         ----------
-        concat: bool
-            Whether to temporally concatenate scan data into
-            a single array. Otherwise, return data from individual
-            scans in a list (default: True).
-        data: Tuple[str] | Literal['func', 'physio'] = ('func', 'physio')
+        data_type: Tuple[str, ...] | str = ('func', 'physio')
             data modality. Can be functional or physio, or both. If both
             pass as a tuple (default: ('func', 'physio'))
-        norm: Literal['zscore', 'demean', None]:
+        norm: Literal['zscore', 'demean', 'robust_z', None]:
             The type of normalization to perform on the time courses. This
             is important if performing concatenation to remove differences
             in baseline signal between scans. Using zscore, differences in signal
-            variability between scan are also removed (default: zscore). Note,
-            sample weight physio files are not normalized before concatenation.
+            variability between scan are also removed (default: zscore). Using robust_z,
+            the median and median absolute deviation are used for normalization,
+            which is less sensitive to outliers (default: zscore).
+        resample_physio: bool
+            whether to resample physio data to match the functional TR (default: True). If False,
+            the physio data is returned at the original sampling frequency (10Hz).
         func_high_pass: bool
             whether to perform a high-pass (>0.01Hz) 5th order butterworth filter
             to both physio and func time courses with nilearn.signal.butterworth.
@@ -228,6 +274,9 @@ class DatasetLoad:
             high-pass filtering on physio time courses (default: False)
         physio_low_pass: bool
             low-pass filtering on physio time courses (default: False)
+        regress_global_signal: bool
+            whether to regress out the global signal from func.gii data. Note,
+             global signal regression should not be applied to ROI time courses (default: False)
         input_mask: bool
             whether to apply roi masks to func.gii data (default: False).
             Masks should have have a value of 1 for vertices within the mask,
@@ -253,7 +302,7 @@ class DatasetLoad:
 
         Returns
         -------
-        output: dict[str, List[np.ndarray]]
+        output: DatasetOutput
             group data in a list or one concatenated array packaged
             in a dictionary where the key is the data modality.
         gii: Gifti
@@ -292,13 +341,15 @@ class DatasetLoad:
             lh_roi, rh_roi = None, None
 
         # initalize output dictionary
-        output = {
+        _output = {
             "func": [],
             "physio": {
                 p_out: []
                 for p in self.params["physio"]["out"]
                 for p_out in self.params["physio"]["out"][p]
             },
+            "sigh_events": [],
+            "yawn_events": [],
         }
         # set func_gii as None (returns None if 'physio' is set as data)
         func_gii = None
@@ -319,43 +370,51 @@ class DatasetLoad:
                 ses=str(ses),
                 data=data_type,
                 norm=norm,
+                resample_physio=resample_physio,
                 func_low_pass=func_low_pass,
                 func_high_pass=func_high_pass,
                 physio_low_pass=physio_low_pass,
                 physio_high_pass=physio_high_pass,
+                regress_global_signal=regress_global_signal,
                 roi_lh_masks=lh_roi,
                 roi_rh_masks=rh_roi,
                 input_mask=input_mask,
                 roi_avg_left_right=roi_avg_left_right,
             )
-            output["func"].append(data_out["func"])
-
+            _output["func"].append(data_out["func"])
+            _output["sigh_events"].append(data_out["sigh_events"])
+            _output["yawn_events"].append(data_out["yawn_events"])
             # loop through physio signals and append to list
             for p in self.params["physio"]["out"]:
                 for p_out in self.params["physio"]["out"][p]:
-                    output["physio"][p_out].append(data_out["physio"][p_out])
+                    _output["physio"][p_out].append(data_out["physio"][p_out])
 
-        # if concatenate is True, stack along the temporal dimension
-        if concat:
-            output = self._concat(data=data_type, data_dict=output)
+        dataset_output = DatasetOutput(
+            func=_output["func"],
+            physio=_output["physio"],
+            sigh_events=_output["sigh_events"],
+            yawn_events=_output["yawn_events"],
+        )
 
-        return output, func_gii  # type: ignore
+        return dataset_output, func_gii
 
     def load_scan(
         self,
         subj: str,
         ses: str,
-        data: Tuple[str, str] | Tuple[str] | str = ("func", "physio"),
-        norm: Literal["zscore", "demean", None] = "zscore",
+        data: Tuple[Literal["func", "physio"], ...] = ("func", "physio"),
+        norm: Literal["zscore", "demean", "robust_z"] | None = "zscore",
+        resample_physio: bool = True,
         func_low_pass: bool = False,
         func_high_pass: bool = False,
         physio_low_pass: bool = False,
         physio_high_pass: bool = False,
+        regress_global_signal: bool = False,
         roi_lh_masks: Dict[str, np.ndarray] | None = None,
         roi_rh_masks: Dict[str, np.ndarray] | None = None,
         input_mask: bool = False,
         roi_avg_left_right: bool = False,
-    ) -> Tuple[dict, Gifti]:
+    ) -> Tuple[dict, Gifti | None]:
         """
         given subject and session label, load func or physio data. Data is
         returned in a dictionary with 'func' and 'physio' as separate keys (
@@ -376,8 +435,13 @@ class DatasetLoad:
             subject label
         ses: str
             subject
-        norm: Literal['zscore', 'demean', None]
-            whether to normalize the data (default: zscore)
+        norm: Literal['zscore', 'demean', 'robust_z', None]
+            whether to normalize the data (default: zscore).
+        resample_physio: bool
+            whether to resample physio data to match func.gii TR (default: True). If False,
+            physio data is returned at the original sampling frequency (10Hz). Note, the
+            sigh and yawn event times are always returned in seconds. Also note,
+            the raw sampling frequency of head motion matches the func.gii TR.
         func_low_pass: bool
             whether to perform low-pass filtering on func.gii data
         func_high_pass: bool
@@ -386,6 +450,10 @@ class DatasetLoad:
             whether to perform low-pass filtering on physio data
         physio_high_pass: bool
             whether to perform high-pass filtering on physio data
+        regress_global_signal: bool
+            whether to regress out the global signal from func.gii data. Note,
+            global signal regression should not be applied to ROI time courses.
+            Default is False.
         roi_lh_masks: Dict[str, np.ndarray]
             left hemisphere roi mask with keys as the roi name
         roi_rh_masks: Dict[str, np.ndarray]
@@ -394,6 +462,8 @@ class DatasetLoad:
             whether to apply roi masks to func.gii data
         roi_avg_left_right: bool
             whether to average left and right hemisphere ROI time courses together (default: False)
+        eog_emg_average: bool
+            whether to average EOG and EMG physiological signals across channels (default: False)
 
         Returns
         -------
@@ -403,9 +473,6 @@ class DatasetLoad:
             signals are returned as a dictionary with physio labels as keys (
             e.g. 'eog1').
         """
-        # if data is passed as str, convert to list
-        if isinstance(data, str):
-            data = (data,)
         # check data modality labels
         for d in data:
             if d not in ["func", "physio"]:
@@ -423,25 +490,27 @@ class DatasetLoad:
             },
         }
 
+        # get data from left and right hemispheres
+        fp_lh = self.iter.to_file(
+            data="func",
+            subject=subj,
+            session=ses,
+            basedir=self.func_dir,
+            file_ext="lh.func.gii",
+        )
+        fp_rh = self.iter.to_file(
+            data="func",
+            subject=subj,
+            session=ses,
+            basedir=self.func_dir,
+            file_ext="rh.func.gii",
+        )
+        # initialize Gifti class
+        func_gii = Gifti(fp_lh, fp_rh)
+
         for d in data:
             if d == "func":
-                # get data from left and right hemispheres
-                fp_lh = self.iter.to_file(
-                    data=d,
-                    subject=subj,
-                    session=ses,
-                    basedir=self.func_dir,
-                    file_ext="lh.func.gii",
-                )
-                fp_rh = self.iter.to_file(
-                    data=d,
-                    subject=subj,
-                    session=ses,
-                    basedir=self.func_dir,
-                    file_ext="rh.func.gii",
-                )
                 # load gifti data
-                func_gii = Gifti(fp_lh, fp_rh)
                 if input_mask:
                     if roi_lh_masks is None or roi_rh_masks is None:
                         raise ValueError(
@@ -455,6 +524,17 @@ class DatasetLoad:
                     )
                 else:
                     func_data = func_gii.load()
+
+                # perform global signal regression
+                if regress_global_signal:
+                    if input_mask:
+                        warnings.warn(
+                            "Global signal regression is being applied to ROI time courses. "
+                            "Recommend setting regress_global_signal to False when using ROI masks."
+                        )
+                    global_signal = func_data.mean(axis=1, keepdims=True)
+                    reg = LinearRegression().fit(global_signal, func_data)
+                    func_data = func_data - reg.predict(global_signal)
 
                 # signal filtering, if specified in init
                 func_data_proc = utils.filter(
@@ -483,6 +563,24 @@ class DatasetLoad:
                             physio_type="out",
                         )
                         physio = np.loadtxt(physio_fp, ndmin=2)
+                        # motion data is already sampled at functional TR
+                        if p == "motion":
+                            physio_tr = self.params["func"]["tr"]
+                        # non-motion physio is 10Hz sampling frequency, resample to match func.gii TR
+                        elif resample_physio:
+                            physio = resample_physio_to_func(
+                                physio,
+                                func_tr=self.params["func"]["tr"],
+                                sf=10,  # physio sampling frequency
+                                func_len=func_gii.n_samples,
+                                interp_method="cubic"
+                                if p_out != "weight"
+                                else "nearest",
+                            )
+                            physio_tr = self.params["func"]["tr"]
+                        else:
+                            physio_tr = 0.1  # physio sampling frequency
+
                         # signal filtering, if specified in init
                         # do not filter or normalize if physio is sample weights
                         if p_out != "weight":
@@ -490,13 +588,30 @@ class DatasetLoad:
                                 physio,
                                 low_pass=physio_low_pass,
                                 high_pass=physio_high_pass,
-                                tr=self.params["func"]["tr"],
+                                tr=physio_tr,
                             )
                             # normalize data, if specified in init
                             physio = utils.norm(physio, norm=norm)
                         output[d][p_out] = physio
 
-        return output, func_gii  # type: ignore
+        # load yawns and sigh events
+        event_fp = f"{self.params['event_dir']}/subject-{subj}_session-{ses}.json"
+        with open(event_fp, "r") as f:
+            events = json.load(f)
+            sigh_events = [
+                marker["time_seconds"]
+                for marker in events["markers"]
+                if marker["label"] == "Sigh"
+            ]
+            yawn_events = [
+                marker["time_seconds"]
+                for marker in events["markers"]
+                if marker["label"] == "Yawn"
+            ]
+        output["sigh_events"] = sigh_events
+        output["yawn_events"] = yawn_events
+
+        return output, func_gii
 
     def _extract_roi(
         self,
@@ -560,15 +675,15 @@ class DatasetLoad:
         """
         # check if roi_masks are passed as a list
         if not isinstance(lh_roi_mask_fps, list):
-            raise ValueError("lh_roi_masks must be passed as a list")
+            raise TypeError("lh_roi_mask_fps must be passed as a list")
         # check if roi_masks are passed as a list
         if not isinstance(rh_roi_mask_fps, list):
-            raise ValueError("rh_roi_masks must be passed as a list")
+            raise TypeError("rh_roi_mask_fps must be passed as a list")
         # check if roi masks are valid
         if not all(os.path.exists(roi_mask) for roi_mask in lh_roi_mask_fps):
-            raise ValueError("lh_roi_masks must be valid file paths")
+            raise ValueError("lh_roi_mask_fps must be valid file paths")
         if not all(os.path.exists(roi_mask) for roi_mask in rh_roi_mask_fps):
-            raise ValueError("rh_roi_masks must be valid file paths")
+            raise ValueError("rh_roi_mask_fps must be valid file paths")
         # load roi masks
         lh_roi = [nb.load(roi_mask).darrays[0].data for roi_mask in lh_roi_mask_fps]  # type: ignore
         rh_roi = [nb.load(roi_mask).darrays[0].data for roi_mask in rh_roi_mask_fps]  # type: ignore
@@ -585,17 +700,77 @@ class DatasetLoad:
         }
         return lh_roi_mask, rh_roi_mask
 
-    def _concat(self, data: Tuple[str, str], data_dict: dict) -> dict:
-        """
-        temorally concatenate func and/or physio data across scans
-        """
-        for d in data:
-            if d == "func":
-                data_dict["func"] = np.concatenate(data_dict["func"], axis=0)
-            elif d == "physio":
-                for p in self.params["physio"]["out"]:
-                    for p_out in self.params["physio"]["out"][p]:
-                        data_dict["physio"][p_out] = np.concatenate(
-                            data_dict["physio"][p_out], axis=0
-                        )
-        return data_dict
+
+def resample_physio_to_func(
+    signal: np.ndarray,
+    func_tr: float,
+    func_len: int,
+    sf: float,
+    interp_method: Literal["cubic", "nearest"] = "cubic",
+) -> np.ndarray:
+    """
+    Resample preprocessed physio signals to functional scan volumes using
+    cubic or nearest neighbor interpolation to the functional times
+    attribute. For physio recordings, signals should be first low-pass
+    filtered (< 0.2 Hz).
+
+    Parameters
+    ----------
+    signal: np.ndarray
+        physio signals
+    func_tr: float
+        functional scan repetition time (TR)
+    func_len: int
+        number of functional scan volumes
+    sf: float
+        sampling frequency of physio signal
+    interp_method
+        interpolation method for interpolating physio data to functional
+        volume samples - use 'nearest' for weights resampling. Otherwise, 'cubic'.
+
+    Returns
+    -------
+    signal_resamp: np.ndarray
+        physio signal resampled to functional volumes
+    """
+    # get functional time points
+    func_t = _calc_func_frame_times(func_tr, func_len)
+    # dont filter sample weights
+    if interp_method not in ["cubic", "nearest"]:
+        raise ValueError("interp method must be cubic or nearest")
+    # get signal time points
+    signal_t = np.arange(len(signal)) * (1 / sf)
+    signal_resamp = nk.signal.signal_interpolate(
+        x_values=signal_t,
+        y_values=np.squeeze(signal),
+        x_new=func_t,
+        method=interp_method,
+    )
+    return signal_resamp
+
+
+def _calc_func_frame_times(func_tr: float, func_len: int) -> np.ndarray:
+    """
+    Calculate interpolation time points from physio to functional samples.
+    FSL slicetimer aligns all functional slices to the middle of the
+    TR (0.5 * TR), so time points should be selected with this in mind.
+
+    Parameters
+    ----------
+    func_tr: float
+        functional scan repetition time (TR)
+    func_len: int
+        number of functional scan volumes
+
+    Returns
+    -------
+    frame_times: np.ndarray
+        time points (from the start of the functional scan) of preprocessed
+        functional volumes to interpolate physio signals to
+
+    """
+    # calculate interpolation time points
+    frame_times = func_tr * (np.arange(func_len) + 0.5)
+    # round to two decimal points
+    frame_times = np.round(frame_times, 2)
+    return frame_times

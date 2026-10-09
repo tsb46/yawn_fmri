@@ -3,57 +3,237 @@ Module for estimating the relationship between functional MRI signals
 and physio signals at successive temporal lags of the physio signal
 """
 
+from __future__ import annotations
+
 import os
 import pickle
-
 from typing import List, Literal, Tuple
 
 import numpy as np
-
 from patsy import dmatrix  # type: ignore
-from sklearn.base import BaseEstimator, TransformerMixin
-from sklearn.linear_model import Ridge
+from scipy.interpolate import interp1d
+from sklearn.linear_model import LinearRegression
 
 from scan.io.load import Gifti
 from scan.io.write import write_func_gii
 
 
-class DistributedLagModelPredResults:
+class HRFBasis:
     """
-    Class for storing predictions of distributed lag modeling. Provides
+    Spline basis for modeling stimulus-evoked hemodynamic response functions.
+
+    The basis is defined over post-stimulus time in seconds and is applied
+    by convolving event regressors with spline basis functions.
+
+    Parameters
+    ----------
+    duration_sec : float
+        Duration of the HRF response window.
+
+    knots_per_sec : float
+        Approximate density of spline basis functions. This is used to determine the number of knots for the spline basis functions.
+
+    knot_spacing : {"uniform", "geometric"}
+        Strategy for distributing knots over the response window before any
+        basis-type-specific adjustment.
+
+    geometric_alpha : float
+        Controls concentration of knots near stimulus onset.
+        Larger values place more knots early in the HRF.
+
+    Usage:
+        >>> hrf_basis = HRFBasis(duration_sec=30.0, knot_spacing="geometric")
+        >>> hrf_basis.create()
+        >>> design_matrix = hrf_basis.project(task_regressor, tr=2.0)
+    """
+
+    def __init__(
+        self,
+        duration_sec: float,
+        knots_per_sec: float = 0.2,
+        knot_spacing: Literal["uniform", "geometric"] = "uniform",
+        geometric_alpha: float = 2.0,
+    ):
+
+        if knot_spacing not in ("uniform", "geometric"):
+            raise ValueError("knot_spacing must be 'uniform' or 'geometric'")
+
+        self.duration_sec = duration_sec
+        self.knots_per_sec = knots_per_sec
+        self.knot_spacing = knot_spacing
+        self.geometric_alpha = geometric_alpha
+
+    def _create_knots(self):
+
+        # Get number of basis functions based on duration and knots per second.
+        n_basis = max(3, int(np.ceil(self.duration_sec * self.knots_per_sec)))
+
+        # Create knots for spline basis functions.
+        if self.knot_spacing == "uniform":
+            knots = np.linspace(0, self.duration_sec, n_basis)
+
+        else:
+            # Create knots with geometric spacing to concentrate basis functions near stimulus onset.
+            x = np.linspace(0, 1, n_basis)
+            knots = (
+                self.duration_sec
+                * (np.exp(self.geometric_alpha * x) - 1)
+                / (np.exp(self.geometric_alpha) - 1)
+            )
+
+        # cr() expects inner knots only
+        if len(knots) > 2:
+            knots = knots[1:-1]
+
+        self.knots = knots
+
+        return knots
+
+    def create(self, dt: float = 0.1, extrapolation: str = "extend"):
+        """
+        Create the spline basis functions over the specified duration.
+
+        Parameters
+        ----------
+        dt : float, default=0.1
+            Time step for sampling the basis functions in seconds.
+        extrapolation : str, default="extend"
+            Extrapolation method for the spline basis functions, options
+            specified in the formulaic documentation. Default is "extend" to
+            allow evaluation of the basis functions at the minimum and maximum bounds of the response window.
+        """
+
+        self.dt = dt
+        self.extrapolation = extrapolation
+
+        self.times = np.arange(0, self.duration_sec + dt, dt)
+
+        self.knots = self._create_knots()
+
+        self.basis = np.asarray(
+            dmatrix(
+                "cr(x, knots=self.knots) - 1",
+                {"x": self.times},
+            ),
+        )
+
+        self._n_basis = self.basis.shape[1]
+
+        return self
+
+    def project(self, X, tr: float, fill_value: float = 0) -> np.ndarray:
+        """
+        Project a stimulus time course onto the spline basis functions.
+
+        Parameters
+        ----------
+        X : np.ndarray
+            One-dimensional stimulus time course with shape (n_timepoints,).
+        tr : float
+            Repetition time of the fMRI acquisition in seconds.
+        fill_value : float, default=0
+            Value used to fill samples before the start of the time series.
+        """
+
+        return self.project_to_times(X, tr=tr, fill_value=fill_value)
+
+    def project_to_times(
+        self,
+        X,
+        tr: float,
+        fill_value: float = 0,
+        sample_times: np.ndarray | None = None,
+    ) -> np.ndarray:
+        """
+        Project a stimulus time course onto the spline basis and optionally
+        resample the projected result at specific times.
+
+        Parameters
+        ----------
+        X : np.ndarray
+            One-dimensional stimulus time course with shape (n_timepoints,).
+        tr : float
+            Sampling interval of ``X`` in seconds.
+        fill_value : float, default=0
+            Value used to fill samples before the start of the time series.
+        sample_times : np.ndarray | None, default=None
+            Optional output times in seconds. If provided, the projected time
+            course is interpolated to these times.
+        """
+
+        if not hasattr(self, "basis"):
+            raise RuntimeError("Call create() before project().")
+
+        # HRF lag grid (seconds)
+        hrf_times = self.times
+
+        # interpolate basis onto TR grid
+        interp = interp1d(
+            hrf_times,
+            self.basis,
+            axis=0,
+            bounds_error=False,
+            fill_value=0,
+        )
+
+        basis_tr = interp(np.arange(0, self.duration_sec + tr, tr))
+
+        # build lag matrix using TR-based lags
+        lags = np.arange(basis_tr.shape[0])
+
+        lag_matrix = _lag_mat(X, lags, fill_val=fill_value)
+        projected = lag_matrix @ basis_tr
+
+        if sample_times is None:
+            return projected
+
+        stim_times = np.arange(projected.shape[0]) * tr
+        interp = interp1d(
+            stim_times,
+            projected,
+            axis=0,
+            bounds_error=False,
+            fill_value=0,
+        )
+        return interp(sample_times)
+
+
+class GLMSplineResults:
+    """
+    Class for storing predictions of GLMSpline. Provides
     utilities for writing predicted time courses to func.gii files.
 
     Attributes
     ----------
     pred_func: np.ndarray
-        predicted time courses from dlm model represented as an ndarray
+        predicted time courses from GLMSpline model represented as an ndarray
         with predicted time points in the rows and vertices in columns.
 
-    dlm_params: dict
-        the parameters used to fit the dlm model
+    glm_spline_params: dict
+        the parameters used to fit the GLMSpline model
 
     Methods
     -------
     write(out_fp, out_dir=None):
-        write predicted time coureses to func.gii and dlm params to pickle
+        write predicted time courses to func.gii and GLMSpline params to pickle
 
     """
 
-    def __init__(self, pred_func: np.ndarray, dlm_params: dict):
+    def __init__(self, pred_func: np.ndarray, glm_spline_params: dict):
         self.pred_func = pred_func
-        self.dlm_params = dlm_params
+        self.glm_spline_params = glm_spline_params
 
     def write(
         self,
         gii_params: Gifti,
-        file_prefix: str = "dlm_pred_out",
+        file_prefix: str = "glm_pred_out",
         out_dir: str | None = None,
     ) -> None:
         """
-        Write out prediction results from dlm model to func.gii and pickle
+        Write out prediction results from GLMSpline model to func.gii and pickle
         file. The func.gii displayed the predicted fMRI values over the
         predicted time span, and the pickle contains params passed to the
-        dlm class.
+        GLMSpline class.
 
         Parameters
         ----------
@@ -62,7 +242,7 @@ class DistributedLagModelPredResults:
             writing out func.gii in the same format as the input func.gii.
             If running group-level analysis, this is returned in the
             Dataset.load() method.
-        out_fp_prefix: str
+        file_prefix: str
             Optional - file path prefix for pickle and func.gii file
         out_dir: str
             Optional - output directory for writing files. If None (default),
@@ -73,151 +253,33 @@ class DistributedLagModelPredResults:
             out_dir = os.getcwd()
 
         out_prefix = f"{out_dir}/{file_prefix}"
-        # write out dlm pred params
+        # write out GLMSpline pred params
         with open(f"{out_prefix}.pkl", "wb") as f:
-            pickle.dump(self.dlm_params, f)
+            pickle.dump(self.glm_spline_params, f)
 
         # write predicted time courses to func.gii
         write_func_gii(self.pred_func, gii_params, out_prefix)
 
 
-class BSplineLagBasis(BaseEstimator, TransformerMixin):
+class GLMSpline:
     """
-    Spline basis for modeling temporal lags of a physio signal based on
-    scikit-learn fit/transform API. Specifically, a B-spline basis is fit
-    along the columns of a lag matrix (rows: time courses; columns: lags),
-    where the first column is the original time course, the second column
-    is the original time course lagged by one time point, the third column
-    lagged by two time points, out to N lags (specified by nlags parameter).
-    You can also specify negative lags (specified by neg_nlags parameter).
+    General linear model with natural cubic spline basis for modeling the
+    event related response of fMRI signals to physiological signal events.
 
-    Attributes
-    ----------
-    nlags: int
-        number of lags (shifts) of the signal in the forward direction
-    nlags_neg: int
-        number of lags (shifts) of the signal in the negative direction.
-        Must be a negative integer. This allows modeling the association between
-        functional and physio signals where the functional leads the physio signal.
-    n_knots: int
-        number of knots in the spline basis across temporal lags. Controls
-        the temporal resolution of the basis, such that more knots results
-        in the ability to capture more complex curves (at the expense of
-        potential overfitting) (default: 5)
-    knots: List[int]
-        Locations of knots in spline basis across temporal lags. If provided,
-        the n_knots parameter is ignored.
-    basis_type: Literal['ns','bs']
-        basis type for the spline basis. 'ns' for natural spline, 'bs' for B-spline.
-
-    Methods
-    -------
-    fit(X,y):
-        fit B-spline basis to lags of the signal.
-    transform(X, y)
-        project lags of the signal onto the B-spline basis. X is the physio
-        time course represented in an ndarray with time points along the
-        rows and a single column (# of time points, 1).
-
-    """
-
-    def __init__(
-        self,
-        nlags: int,
-        neg_nlags: int = 0,
-        n_knots: int = 5,
-        knots: List[int] | None = None,
-        basis_type: Literal["cr", "bs"] = "bs",
-    ):
-        if neg_nlags > 0:
-            raise ValueError("neg_nlags must be a negative integer")
-
-        # specify array of lags
-        self.lags = np.arange(neg_nlags, nlags + 1)
-        # specify knots parameters
-        self.n_knots = n_knots
-        self.knots = knots
-        self.basis_type = basis_type
-
-    def fit(self, X: np.ndarray, y: np.ndarray | None = None):
-        """
-        create spline basis over lags of physio signal
-
-        Parameters
-        ----------
-        X: np.ndarray
-            The physio time course represented in an ndarray with time points
-            along the rows and a single column (# of time points, 1).
-        y: None
-            Not used, for consistency with sklearn API
-        """
-        # create spline basis from sklearn SplineTransformer
-        if self.knots is not None:
-            self.basis = dmatrix(
-                f"{self.basis_type}(x, knots=self.knots) - 1", {"x": self.lags}
-            )
-        else:
-            self.basis = dmatrix(
-                f"{self.basis_type}(x, df=self.n_knots) - 1", {"x": self.lags}
-            )
-
-        return self
-
-    def transform(self, X: np.ndarray, y: np.ndarray | None = None) -> np.ndarray:
-        """
-        project lags of physio signal onto spline basis
-
-        Parameters
-        ----------
-        X: np.ndarray
-            The physio time course represented in an ndarray with time points
-            along the rows and a single column (# of time points, 1).
-        y: None
-            Not used, for consistency with sklearn API
-
-        Returns
-        -------
-        lag_proj: np.ndarray
-            Physio signal projected on B-spline basis.
-        """
-        # create lag matrix
-        lagmat = _lag_mat(X, self.lags.tolist())
-        # get number of splines
-        n_splines = self.basis.shape[1]
-        # allocate memory
-        lag_proj = np.empty((lagmat.shape[0], n_splines), dtype=lagmat.dtype)
-        for lag in np.arange(n_splines):
-            lag_proj[:, lag] = np.dot(lagmat, self.basis[:, lag])
-
-        return lag_proj
-
-
-class DistributedLagModel:
-    """
-    Distributed lag model of physio signals regressed onto functional
-    MRI signals at each voxel (mass-univariate). Specifically, lags of
-    the physio signal are projected on a B-spline basis and regressed onto
-    functional MRI signals.
-
-    nlags: int
-        number of lags (shifts) of the physio signal in the forward direction
-    nlags_neg: int
-        number of lags (shifts) of the physio signal in the negative direction.
-        Must be a negative integer. This allows modeling the association between
-        functional and physio signals where the functional leads the physio signal.
-    n_knots: int
-        number of knots in the spline basis across temporal lags. Controls
-        the temporal resolution of the basis, such that more knots results
-        in the ability to capture more complex curves (at the expense of
-        potential overfitting) (default: 5)
-    knots: List[int]
-        knot locations for the spline basis across temporal lags. If supplied, this
-        overrides the n_knots parameter.
-    alpha: float
-        regularization strength of the Ridge regression [0, inf]. Greater values
-        results in greater regularization (default: 0.01).
-    basis: Literal['cr','bs']
-        basis type for the spline basis. 'cr' for natural spline, 'bs' for B-spline.
+    tr: float
+        repetition time of the fMRI acquisition in seconds
+    duration_sec: int
+        duration of the event-related response in seconds
+    knots_per_sec: float
+        approximate density of spline basis functions. This is used to determine the number of knots for the
+        spline basis functions.
+    knot_spacing: Literal["uniform", "geometric"]
+        strategy for distributing knots over the response window before any basis-type-specific adjustment.
+    geometric_alpha: float
+        controls concentration of knots near stimulus onset. Larger values place more knots early in the HRF.
+    slicetime_ref: float
+        reference time for slice timing correction. This is used to adjust the event onsets for slice timing correction.
+        The value should be between 0 and 1, where 0 corresponds to the first slice and 1 corresponds to the last slice.
 
     Methods
     -------
@@ -230,425 +292,283 @@ class DistributedLagModel:
 
     def __init__(
         self,
-        nlags: int,
-        neg_nlags: int = 0,
-        n_knots: int = 5,
-        knots: List[int] | None = None,
-        alpha: float = 0.01,
-        basis: Literal["cr", "bs"] = "bs",
+        tr: float,
+        duration_sec: float = 30.0,
+        knots_per_sec: float = 0.2,
+        knot_spacing: Literal["uniform", "geometric"] = "uniform",
+        geometric_alpha: float = 2.0,
+        slicetime_ref: float = 0.5,
     ):
-        # specify array of lags
-        self.nlags = nlags
-        if neg_nlags > 0:
-            raise ValueError("neg_nlags must be a negative integer")
-        self.neg_nlags = neg_nlags
-        self.n_knots = n_knots
-        self.knots = knots
-        self.alpha = alpha
-        self.basis_type = basis
+        self.duration_sec = duration_sec
+        self.knots_per_sec = knots_per_sec
+        self.knot_spacing = knot_spacing
+        self.tr = tr
+        self.geometric_alpha = geometric_alpha
+        self.slicetime_ref = slicetime_ref
 
-    def fit(self, X: np.ndarray, Y: np.ndarray, weights: np.ndarray | None = None):
+    def _internal_dt(self) -> float:
+        """Return the fine internal sampling interval used for stimulus timing."""
+
+        return self.tr / 10.0
+
+    def fit(
+        self,
+        events: list[list[float]],
+        fmri: list[np.ndarray],
+    ):
         """
-        fit regression model of physio lag spline basis regressed on functional
-        time courses
+        fit regression model of event-related response of fMRI signals to physiological signal events.
 
         Parameters
         ----------
-        X: np.ndarray
-            The physio time course represented in an ndarray with time points
-            along the rows and a single column (# of time points, 1).
-        Y: np.ndarray
-            functional MRI time courses represented in an ndarray with time
+        events: List[List[int]]
+            The list of event onsets for each trial. Each sublist contains the onset times for a single trial.
+        fmri: List[np.ndarray]
+            functional MRI time courses represented as a list of ndarrays, each with time
             points along the rows and vertices in the columns (# of time
             points, # of vertices).
-        weights: np.ndarray
-            weights for each time point. If None, all weights are set to 1.
         """
         # create B-spline basis across lags of physio signal
-        self.basis = BSplineLagBasis(
-            nlags=self.nlags,
-            neg_nlags=self.neg_nlags,
-            n_knots=self.n_knots,
-            knots=self.knots,
-            basis_type=self.basis_type,  # type: ignore
+        self.basis = HRFBasis(
+            duration_sec=self.duration_sec,
+            knots_per_sec=self.knots_per_sec,
+            knot_spacing=self.knot_spacing,  # type: ignore
+            geometric_alpha=self.geometric_alpha,  # type: ignore
         )
-        self.basis.fit(X)
-        # project physio signal lags on B-spline basis
-        x_basis = self.basis.transform(X)
-        # create nan mask for x_basis
-        self.nan_mask = np.isnan(x_basis).any(axis=1)
-        # if weights is None, set to ones
-        if weights is None:
-            weights = np.ones(X.shape[0])
+        fmri_list = []
+        event_list = []
+        stim_dt = self._internal_dt()
+        self.basis.create(dt=stim_dt)
+        for fmri_data, fmri_events in zip(fmri, events):
+            # if no events, skip this fmri_data
+            if len(fmri_events) == 0:
+                continue
+            n_frames = fmri_data.shape[0]
+            # get time samples of functional scan based on slicetime reference
+            frametimes = self.slicetime_ref + np.arange(n_frames) * self.tr
+            fine_frametimes = np.arange(
+                0, frametimes[-1] + self.duration_sec + stim_dt, stim_dt
+            )
+            # rasterize event onsets on the fine internal grid before projection
+            event_regressor = _rasterize_events(
+                np.asarray(fmri_events, dtype=float),
+                fine_frametimes,
+                event_duration_sec=0.1,
+            )
+            convolved = self.basis.project_to_times(
+                event_regressor,
+                tr=stim_dt,
+                fill_value=0.0,
+                sample_times=frametimes,
+            )
+            fmri_list.append(fmri_data)
+            event_list.append(convolved)
+
+        # concatenate fmri data and convolved event regressors across runs
+        Y = np.vstack(fmri_list)
+        X = np.vstack(event_list)
         # fit Ridge regression model
-        self.glm = Ridge(alpha=self.alpha, fit_intercept=True)
+        self.glm = LinearRegression()
         self.glm.fit(
-            x_basis[~self.nan_mask],
-            Y[~self.nan_mask],
-            sample_weight=weights[~self.nan_mask],
+            X,
+            Y,
         )
         return self
 
     def evaluate(
         self,
-        lag_max: float | None = None,
-        lag_min: float | None = None,
+        duration_max: float | None = None,
         n_eval: int = 30,
         pred_val: float = 1.0,
-    ) -> DistributedLagModelPredResults:
+    ) -> GLMSplineResults:
         """
-        Evaluate the model at user-specified lags and values of the physio signal.
+        Evaluate the model for a
 
         Parameters
         ----------
-        lag_max: float
-            The length of lags of the physio signal to predict functional time
-            courses for. If None, set to nlag specified in initialization. (
-            default: None)
-        lag_min: float
-            The minimium lag of the physio signal to predict functional time
-            courses for. Must be a negative integer. If None, set to neg_nlag
-            specified in initialization. (default: None)
+        duration_max: float
+            The maximum duration of the event to predict functional time
+            courses for. If None, set to duration_max specified in initialization. (default: None)
         n_eval: int
-            Number of interpolated samples to predict functional time
-            courses for between lag_min and lag_max.
+            The number of evaluation points to use for predicting functional time
+            courses. (default: 30)
         pred_val: float
             The predicted physio signal value used to predict functional time
             courses (default: 1.0).
 
         Returns
         -------
-        dlm_pred: DistributedLagModelPredResults
-            Container object for distribued lag model prediction results
+        glm_pred: GLMSplineResults
+            Container object for GLM spline model prediction results
         """
         # if lag_max is None, set nlags
-        if lag_max is None:
-            lag_max = self.nlags
-        # if lag_min is None, set neg_nlags
-        if lag_min is None:
-            lag_min = self.neg_nlags
-        else:
-            if lag_min > 0:
-                raise ValueError("lag_min must be a negative integer")
+        if duration_max is None:
+            duration_max = self.duration_sec
+
+        if duration_max > self.duration_sec:
+            raise ValueError(
+                f"duration_max ({duration_max}) cannot be greater than duration_sec ({self.duration_sec})"
+            )
 
         # specify lags for prediction (number of samples set by n_eval )
-        pred_lags = np.linspace(lag_min, lag_max, n_eval)
-        # project lag vector onto B-spline basis
-        pred_basis = dmatrix(
-            self.basis.basis.design_info, {"x": pred_lags.reshape(-1, 1)}
+        pred_lags = np.linspace(0, duration_max, n_eval)
+        stim_dt = self._internal_dt()
+        n_stim = int(np.ceil(self.duration_sec / stim_dt)) + 1
+        impulse = np.zeros(n_stim, dtype=float)
+        impulse[0] = pred_val
+        pred_func = self.basis.project_to_times(
+            impulse,
+            tr=stim_dt,
+            fill_value=0.0,
+            sample_times=pred_lags,
         )
-        # project prediction value on lag B-spline basis
-        physio_pred = [
-            pred_val * pred_basis[:, lag] for lag in range(pred_basis.shape[1])
-        ]
-        physio_pred = np.vstack(physio_pred).T
-        # Get predictions from model
-        pred_func = self.glm.predict(physio_pred)
-        # package output in container object
-        dlm_pred = DistributedLagModelPredResults(
+        pred_func = self.glm.predict(pred_func)
+        return GLMSplineResults(
             pred_func=pred_func,
-            dlm_params={
-                "lag_max": lag_max,
-                "lag_min": lag_min,
+            glm_spline_params={
+                "duration_max": duration_max,
                 "n_eval": n_eval,
                 "pred_lags": pred_lags,
-                "basis_type": self.basis_type,
+                "pred_val": pred_val,
             },
         )
-        return dlm_pred
 
     def predict(self, X: np.ndarray) -> np.ndarray:
         """
-        Predict functional MRI time courses from physio time courses.
+        Predict functional MRI time courses from event time courses.
 
         Parameters
         ----------
         X: np.ndarray
-            The physio time course represented in an ndarray with time points
+            The event time course represented in an ndarray with time points
             along the rows and a single column (# of time points, 1).
         """
+        X = np.asarray(X)
+        if X.ndim != 1:
+            raise ValueError("X must be a one-dimensional array.")
+
         # project physio signal lags on B-spline basis
-        x_basis = self.basis.transform(X)
-        # create nan mask for x_basis
-        self.nan_mask = np.isnan(x_basis).any(axis=1)
-        # initialize output func with NaNs
-        pred_func = np.full((x_basis.shape[0], self.glm.coef_.shape[0]), np.nan)
+        x_basis = self.basis.project(X, tr=self.tr, fill_value=0.0)
         # get predictions from model
-        pred_func[~self.nan_mask, :] = self.glm.predict(x_basis[~self.nan_mask])
+        pred_func = self.glm.predict(x_basis)
         return pred_func
 
 
-class MultivariateDistributedLagModel:
+def _lag_mat(
+    X: np.ndarray,
+    lags: np.ndarray,
+    fill_val: float = 0.0,
+) -> np.ndarray:
     """
-    Multivariate distributed lag model that extends DistributedLagModel to handle
-    multiple time series and their interactions. Creates a basis of main effects
-    and pairwise interactions across all time series and their lags.
+    Create a positive-lagged design matrix from a stimulus time course.
 
     Parameters
     ----------
-    nlags : int
-        Number of lags (shifts) of each physio signal in the forward direction
-    neg_nlags : int
-        Number of lags (shifts) of each physio signal in the negative direction.
-        Must be a negative integer.
-    n_knots : int
-        Number of knots in the spline basis across temporal lags for each signal
-    knots : List[int]
-        List of knot locations for each signal's spline basis. If provided,
-        overrides n_knots parameter.
-    alpha : float
-        Regularization strength of the Ridge regression [0, inf] (default: 0.01)
-    basis : Literal['cr','bs']
-        Basis type for the spline basis. 'cr' for natural spline, 'bs' for B-spline.
-    """
+    X : np.ndarray
+        One-dimensional stimulus time course with shape (n_timepoints,).
 
-    def __init__(
-        self,
-        nlags: int,
-        neg_nlags: int = 0,
-        n_knots: int = 5,
-        knots: List[int] | None = None,
-        alpha: float = 0.01,
-        basis: Literal["cr", "bs"] = "bs",
-    ):
-        self.nlags = nlags
-        if neg_nlags > 0:
-            raise ValueError("neg_nlags must be a negative integer")
-        self.neg_nlags = neg_nlags
-        self.n_knots = n_knots
-        self.knots = knots
-        self.alpha = alpha
-        self.basis_type = basis
-        self.n_signals = None  # Will be set during fit
+    lags : np.ndarray
+        Positive integer lags (in TRs). Lag 0 corresponds to the original
+        time course.
 
-    def fit(self, X: np.ndarray, Y: np.ndarray, weights: np.ndarray | None = None):
-        """
-        Fit regression model using tensor product basis across all signals and their lags.
-
-        Parameters
-        ----------
-        X : np.ndarray
-            The physio time courses with shape (n_timepoints, n_signals)
-        Y : np.ndarray
-            Functional MRI time courses with shape (n_timepoints, n_vertices)
-        weights : np.ndarray
-            Weights for each time point. If None, all weights are set to 1.
-        """
-        self.n_signals = X.shape[1]
-
-        # Create basis for each signal
-        self.bases = []
-        for i in range(self.n_signals):
-            basis = BSplineLagBasis(
-                nlags=self.nlags,
-                neg_nlags=self.neg_nlags,
-                n_knots=self.n_knots,
-                knots=self.knots if self.knots is not None else None,
-                basis_type=self.basis_type,  # type: ignore
-            )
-            basis.fit(X[:, [i]])
-            self.bases.append(basis)
-
-        # Create tensor product basis across all signals
-        self.tensor_basis, self.nan_mask = self._create_pairwise_interaction_basis(X)
-
-        # if weights is None, set to ones
-        if weights is None:
-            weights = np.ones(X.shape[0])
-
-        # Fit Ridge regression
-        self.glm = Ridge(alpha=self.alpha, fit_intercept=True)
-        self.glm.fit(
-            self.tensor_basis[~self.nan_mask],
-            Y[~self.nan_mask],
-            sample_weight=weights[~self.nan_mask],
-        )
-
-        return self
-
-    def _create_pairwise_interaction_basis(
-        self, X: np.ndarray
-    ) -> Tuple[np.ndarray, np.ndarray]:
-        """
-        Create pairwise interaction basis by taking outer product of all signal bases.
-
-        Parameters
-        ----------
-        X : np.ndarray
-            Input signals with shape (n_timepoints, n_signals)
-
-        Returns
-        -------
-        Tuple[np.ndarray, np.ndarray]
-            Tensor product basis matrix and nan mask
-        """
-        # Get basis for each signal
-        signal_bases = []
-        for i, basis in enumerate(self.bases):
-            signal_basis = basis.transform(X[:, [i]])
-            signal_bases.append(signal_basis)
-
-        # Create tensor product basis
-        tensor_basis = np.hstack(signal_bases)
-        for i in range(len(signal_bases)):
-            for j in range(i + 1, len(signal_bases)):
-                outer_product = self._outer_product(signal_bases[i], signal_bases[j])
-                tensor_basis = np.hstack([tensor_basis, outer_product])
-
-        # Create nan mask
-        nan_mask = np.isnan(tensor_basis).any(axis=1)
-
-        return tensor_basis, nan_mask
-
-    def _outer_product(self, basis1: np.ndarray, basis2: np.ndarray) -> np.ndarray:
-        """
-        Compute outer product of two basis matrices.
-
-        Parameters
-        ----------
-        basis1 : np.ndarray
-            First basis matrix
-        basis2 : np.ndarray
-            Second basis matrix
-
-        Returns
-        -------
-        np.ndarray
-            Outer product basis matrix
-        """
-        n_samples = basis1.shape[0]
-        n_basis1 = basis1.shape[1]
-        n_basis2 = basis2.shape[1]
-
-        outer_basis = np.zeros((n_samples, n_basis1 * n_basis2))
-        for i in range(n_basis1):
-            for j in range(n_basis2):
-                outer_basis[:, i * n_basis2 + j] = basis1[:, i] * basis2[:, j]
-
-        return outer_basis
-
-    def evaluate(
-        self,
-        lag_max: float | None = None,
-        lag_min: float | None = None,
-        n_eval: int = 30,
-        pred_vals: List[float] | None = None,
-    ) -> DistributedLagModelPredResults:
-        """
-        Evaluate the model at user-specified values of the physio signal.
-
-        Parameters
-        ----------
-        lag_max : float
-            Maximum lag for prediction
-        lag_min : float
-            Minimum lag for prediction. Must be a negative integer.
-        n_eval : int
-            Number of evaluation points
-        pred_vals : List[float]
-            List of values for each signal to predict at. If None, uses 1.0 for all signals.
-
-        Returns
-        -------
-        DistributedLagModelPredResults
-            Container with prediction results
-        """
-        if lag_max is None:
-            lag_max = self.nlags
-        if lag_min is None:
-            lag_min = self.neg_nlags
-        else:
-            if lag_min > 0:
-                raise ValueError("lag_min must be a negative integer")
-
-        if pred_vals is None:
-            pred_vals = [1.0] * self.n_signals  # type: ignore
-        elif len(pred_vals) != self.n_signals:
-            raise ValueError(f"pred_vals must have length {self.n_signals}")
-
-        # Create evaluation points
-        pred_lags = np.linspace(lag_min, lag_max, n_eval)
-
-        # Create prediction basis for each signal
-        pred_bases = []
-        for i, basis in enumerate(self.bases):
-            # Create array with n_eval rows of the prediction value
-            pred_basis = dmatrix(
-                basis.basis.design_info, {"x": pred_lags.reshape(-1, 1)}
-            )
-            # project prediction value on lag B-spline basis
-            physio_pred = [
-                pred_vals[i] * pred_basis[:, lag] for lag in range(pred_basis.shape[1])
-            ]
-            physio_pred = np.vstack(physio_pred).T
-            pred_bases.append(physio_pred)
-
-        # Create tensor product basis
-        pred_tensor_basis = np.hstack(pred_bases)
-        for i in range(len(pred_bases)):
-            for j in range(i + 1, len(pred_bases)):
-                outer_product = self._outer_product(pred_bases[i], pred_bases[j])
-                pred_tensor_basis = np.hstack([pred_tensor_basis, outer_product])
-
-        # Get predictions
-        pred_func = self.glm.predict(pred_tensor_basis)
-
-        # Package results
-        dlm_pred = DistributedLagModelPredResults(
-            pred_func=pred_func,
-            dlm_params={
-                "lag_max": lag_max,
-                "lag_min": lag_min,
-                "n_eval": n_eval,
-                "pred_lags": pred_lags,
-                "pred_vals": pred_vals,
-                "basis_type": self.basis_type,
-            },
-        )
-
-        return dlm_pred
-
-
-def _lag_mat(x: np.ndarray, lags: list[int]) -> np.ndarray:
-    """
-    Create array of time-lagged copies of the time course.
-
-    Parameters
-    ----------
-    x : np.ndarray
-        Input array of shape (n_timepoints, n_features)
-    lags : list[int]
-        List of integer lags. Positive = shift forward in time (x[t-lag]),
-        negative = shift backward (x[t+|lag|])
+    fill_val : float, default=0.0
+        Value used to fill samples before the start of the time series.
 
     Returns
     -------
-    np.ndarray
-        Lagged matrix of shape (n_timepoints, n_features * n_lags)
-    """
-    n_rows, n_cols = x.shape
-    n_lags = len(lags)
+    lagged : np.ndarray
+        Lag matrix with shape (n_timepoints, n_lags).
 
-    # Allocate output and fill with NaNs
-    x_lag = np.full((n_rows, n_cols * n_lags), np.nan, dtype=x.dtype)
+        Column j contains X shifted by lags[j] TRs:
+
+            lagged[t, j] = X[t - lags[j]]
+
+    Notes
+    -----
+    This function is intended for distributed lag / HRF basis modeling,
+    where each column represents the stimulus history at a different
+    post-stimulus delay.
+    """
+
+    X = np.asarray(X)
+
+    if X.ndim != 1:
+        raise ValueError("X must be a one-dimensional array.")
+
+    lags = np.asarray(lags)
+
+    if np.any(lags < 0):
+        raise ValueError("Only positive lags are allowed.")
+
+    if not np.all(lags.astype(int) == lags):
+        raise ValueError("lags must contain integer TR offsets.")
+
+    lags = lags.astype(int)
+
+    n_time = X.shape[0]
+
+    lagged = np.full(
+        (n_time, len(lags)),
+        fill_val,
+        dtype=float,
+    )
 
     for i, lag in enumerate(lags):
-        col_start = i * n_cols
-        col_end = col_start + n_cols
-
         if lag == 0:
-            # No shift
-            x_lag[:, col_start:col_end] = x
+            lagged[:, i] = X
 
-        elif lag > 0:
-            # Shift DOWN: x[t - lag]
-            # First `lag` rows are invalid
-            x_lag[lag:, col_start:col_end] = x[: n_rows - lag, :]
+        else:
+            lagged[lag:, i] = X[:-lag]
 
-        else:  # lag < 0
-            shift = abs(lag)
-            # Shift UP: x[t + shift]
-            # Last `shift` rows are invalid
-            x_lag[: n_rows - shift, col_start:col_end] = x[shift:, :]
+    return lagged
 
-    return x_lag
+
+def _rasterize_events(
+    onsets: np.ndarray,
+    sample_times: np.ndarray,
+    event_duration_sec: float = 0.1,
+) -> np.ndarray:
+    """
+    Rasterize event onsets onto a uniformly sampled stimulus grid.
+
+    Parameters
+    ----------
+    onsets : np.ndarray
+        Event onset times in seconds.
+    sample_times : np.ndarray
+        Uniformly spaced time points defining the stimulus grid.
+    event_duration_sec : float, default=0.1
+        Duration of each event boxcar in seconds.
+    """
+
+    onsets = np.asarray(onsets, dtype=float)
+    sample_times = np.asarray(sample_times, dtype=float)
+
+    if sample_times.ndim != 1:
+        raise ValueError("sample_times must be a one-dimensional array.")
+
+    if sample_times.size == 0:
+        return np.zeros(0, dtype=float)
+
+    if sample_times.size == 1:
+        dt = event_duration_sec
+    else:
+        deltas = np.diff(sample_times)
+        dt = float(np.median(deltas))
+        if not np.allclose(deltas, dt):
+            raise ValueError("sample_times must be evenly spaced.")
+
+    stimulus = np.zeros(sample_times.shape[0], dtype=float)
+    if onsets.size == 0:
+        return stimulus
+
+    start_time = sample_times[0]
+    for onset in onsets:
+        start_idx = int(np.floor((onset - start_time) / dt))
+        stop_idx = int(np.ceil((onset + event_duration_sec - start_time) / dt))
+        start_idx = max(start_idx, 0)
+        stop_idx = min(stop_idx, stimulus.shape[0])
+        if stop_idx > start_idx:
+            stimulus[start_idx:stop_idx] = 1.0
+
+    return stimulus

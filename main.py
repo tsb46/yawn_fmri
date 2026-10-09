@@ -119,7 +119,6 @@ def load_data(
             func_high_pass=True,
             regress_global_signal=regress_global_signal,
         )
-        breakpoint()
 
     # concatenate data across sessions
     if concat:

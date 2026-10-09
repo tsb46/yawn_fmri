@@ -99,8 +99,6 @@ python main.py -a resp-events
 python main.py -a fc -o results/main
 ```
 
-Note: `main.py` currently contains a `breakpoint()` in `load_data()` (vertex-wise loading branch used by `resp-events`) that must be removed to run non-interactively.
-
 ## 3. Plots (`scan/plots` and `plots/`)
 
 `scan/plots` provides reusable plotting code (importable from `scan.plots`):
@@ -126,7 +124,7 @@ Standalone scripts that are not part of the main analysis flow:
   ```
   cd scripts && python gordon18_to_scan_roi.py
   ```
-- `scripts/figure2b_panel_b.py`: renders a Figure 2B-style summary of SCAN vs. effector (foot, hand, mouth) FC: a surface map of `inter-effector - max(foot, hand, mouth)` and per-network bars from a CIFTI atlas. Takes the FC maps produced by `main.py -a fc`:
+- `scripts/figure2b_panel_b.py`: renders a Figure 2B-style summary of SCAN vs. effector (foot, hand, mouth) FC as presented in Gordon et al. (2023): a surface map of `inter-effector - max(foot, hand, mouth)` and per-network bars from a CIFTI atlas. Takes the FC maps produced by `main.py -a fc`:
   ```
   python scripts/figure2b_panel_b.py \
     --scan-left results/main/vanderbilt_fc_map_SCAN_roi_lh.func.gii \

@@ -9,8 +9,8 @@ import pickle
 import numpy as np
 from sklearn.linear_model import LinearRegression
 
-from scan.io.load import Gifti
-from scan.io.write import write_func_gii
+from yawn.io.load import Gifti
+from yawn.io.write import write_func_gii
 
 
 class FCMapResults:

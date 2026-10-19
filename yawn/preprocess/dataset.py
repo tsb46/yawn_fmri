@@ -46,6 +46,7 @@ def load_physio_vanderbilt(
         # - 1 to account for zero-indexing in Python
         weights[weights_idx - 1] = 0
     else:
+        print(physio_fp)
         # BIOPAC recordings
         resp, sf_physio = _biopac_load_vanderbilt(physio_raw)
         weights = np.ones(len(resp))

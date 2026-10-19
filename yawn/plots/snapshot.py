@@ -13,14 +13,14 @@ from matplotlib.colors import is_color_like, to_rgba
 from nilearn import surface
 import numpy as np
 
-from scan.plots.surface import RenderedSurfaceFigure
-from scan.plots.surface import SurfaceCameraConfig
-from scan.plots.surface import SurfaceOverlay
-from scan.plots.surface import SurfaceRenderOptions
-from scan.plots.surface import compute_intensity_bounds
-from scan.plots.surface import render_surface_figure
-from scan.plots.surface import render_surface_into_axes
-from scan.plots.surface import validate_map_against_mesh
+from yawn.plots.surface import RenderedSurfaceFigure
+from yawn.plots.surface import SurfaceCameraConfig
+from yawn.plots.surface import SurfaceOverlay
+from yawn.plots.surface import SurfaceRenderOptions
+from yawn.plots.surface import compute_intensity_bounds
+from yawn.plots.surface import render_surface_figure
+from yawn.plots.surface import render_surface_into_axes
+from yawn.plots.surface import validate_map_against_mesh
 
 
 @dataclasses.dataclass(frozen=True)

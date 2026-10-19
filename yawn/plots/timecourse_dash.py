@@ -10,7 +10,7 @@ from typing import Any, Literal
 import numpy as np
 import pandas as pd
 
-from scan.plots.timecourse import (
+from yawn.plots.timecourse import (
     TimeSeriesMarker,
     build_timecourse_marker,
     markers_from_serialized_annotations,

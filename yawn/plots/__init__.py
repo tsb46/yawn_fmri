@@ -1,13 +1,13 @@
 """Plotting utilities for scan_physio."""
 
-from scan.plots.network_summary import plot_network_summary
-from scan.plots.snapshot import (
+from yawn.plots.network_summary import plot_network_summary
+from yawn.plots.snapshot import (
     SurfaceSnapshotPlotter,
     build_snapshot_plotter,
     load_snapshot_scene,
     select_snapshot_output_path,
 )
-from scan.plots.surface import (
+from yawn.plots.surface import (
     RenderedSurfaceFigure,
     SurfaceCameraConfig,
     SurfaceOverlay,
@@ -16,7 +16,7 @@ from scan.plots.surface import (
     render_surface_figure,
     validate_map_against_mesh,
 )
-from scan.plots.timecourse import (
+from yawn.plots.timecourse import (
     TimeSeriesMarker,
     build_timecourse_marker,
     markers_from_serialized_annotations,
@@ -24,7 +24,7 @@ from scan.plots.timecourse import (
     plot_timeseries,
     serialize_timecourse_annotations,
 )
-from scan.plots.timecourse_dash import (
+from yawn.plots.timecourse_dash import (
     create_timecourse_annotation_app,
     run_timecourse_annotation_app,
 )

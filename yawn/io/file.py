@@ -8,7 +8,7 @@ from typing import Literal, Tuple, Generator, List, Union
 
 import pandas as pd
 
-from scan import utils
+from yawn import utils
 
 
 class Field(Enum):
@@ -59,7 +59,7 @@ class Participant:
     ):
         self.subj_ses_select = subj_ses_select
         # load subject list for chosen dataset
-        df = pd.read_csv(f"scan/meta/{dataset}_participant.csv", dtype=str)
+        df = pd.read_csv(f"yawn/meta/{dataset}_participant.csv", dtype=str)
         # subject and session are necessary fields
         if Field.SUBJECT.value not in df.columns:
             raise ValueError(
@@ -90,7 +90,7 @@ class Participant:
         self.n_scans = len(self.values)
 
         # get parameters
-        with open("scan/meta/params.json", "rb") as f:
+        with open("yawn/meta/params.json", "rb") as f:
             params = json.load(f)[dataset]
         self.file_format = params["file_format"]
 

@@ -34,7 +34,7 @@
       "smooth_fwhm": 5.0,
       "tr": 2.1,
       "echos": [13, 31, 49],
-      "sliceorder": "scan/meta/vanderbilt_sliceorder.txt"
+      "sliceorder": "yawn/meta/vanderbilt_sliceorder.txt"
     },
     "anat": {
       "bet_frac": 0.5

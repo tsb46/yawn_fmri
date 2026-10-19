@@ -14,8 +14,8 @@ import nibabel as nb
 import numpy as np
 from sklearn.linear_model import LinearRegression
 
-from scan.io import utils
-from scan.io.file import Participant
+from yawn.io import utils
+from yawn.io.file import Participant
 
 LH_MEDIAL_WALL_MASK = "template/fsLR_hemi-L_den-32k_desc-nomedialwall_dparc.label.gii"
 RH_MEDIAL_WALL_MASK = "template/fsLR_hemi-R_den-32k_desc-nomedialwall_dparc.label.gii"
@@ -204,7 +204,7 @@ class DatasetLoad:
         self.subj_ses_select = subj_ses_select
         # get dataset parameters
         # get data formatting
-        with open("scan/meta/params.json", "rb") as f:
+        with open("yawn/meta/params.json", "rb") as f:
             self.params = json.load(f)[dataset]
         # define output directories to search for files
         self.func_dir = f"{self.params['directory']['func']}/{func_dir}"

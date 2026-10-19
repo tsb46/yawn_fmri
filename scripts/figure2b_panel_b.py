@@ -39,7 +39,7 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scan.plots import (
+from yawn.plots import (
     SurfaceOverlay,
     SurfaceRenderOptions,
     render_surface_figure,
@@ -556,6 +556,8 @@ def _render_surface_image(
     vmin: float,
     vmax: float,
     threshold: float,
+    colorbar_label: str,
+    colorbar_fontsize: int,
     sulc_file_reverse_sign: bool = True,
 ) -> np.ndarray:
     if sulc_file_reverse_sign:
@@ -588,6 +590,8 @@ def _render_surface_image(
         ),
         index=0,
     )
+    if rendered.colorbar_ax is not None:
+        rendered.colorbar_ax.set_ylabel(colorbar_label, fontsize=colorbar_fontsize)
     canvas = FigureCanvasAgg(rendered.figure)
     canvas.draw()
     rgba = np.asarray(canvas.buffer_rgba()).copy()
@@ -690,6 +694,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=_default_surface_path("fsaverage.R.sulc.32k_fs_LR.surf.gii"),
     )
     parser.add_argument("--cmap", type=str, default="turbo")
+    parser.add_argument(
+        "--colorbar-label",
+        type=str,
+        default="Δ FC Z(r): inter-effector - max(foot, hand, mouth)",
+        help="Title shown next to the surface colorbar.",
+    )
+    parser.add_argument(
+        "--colorbar-fontsize",
+        type=int,
+        default=8,
+        help="Font size for the colorbar label.",
+    )
     parser.add_argument("--vmin", type=float, default=None)
     parser.add_argument("--vmax", type=float, default=None)
     parser.add_argument(
@@ -720,8 +736,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--con-color", type=str, default="#5A189A")
     parser.add_argument("--surface-width", type=float, default=6.8)
     parser.add_argument("--surface-height", type=float, default=2.8)
-    parser.add_argument("--figure-width", type=float, default=13.5)
-    parser.add_argument("--figure-height", type=float, default=4.5)
+    parser.add_argument("--figure-width", type=float, default=17)
+    parser.add_argument("--figure-height", type=float, default=7)
     parser.add_argument("--dpi", type=int, default=200)
     parser.add_argument("--bar-width", type=float, default=0.72)
     return parser
@@ -862,12 +878,14 @@ def main() -> None:
         vmin=vmin,
         vmax=vmax,
         threshold=float(args.threshold),
+        colorbar_label=str(args.colorbar_label),
+        colorbar_fontsize=int(args.colorbar_fontsize),
     )
 
     fig = plt.figure(
         figsize=(float(args.figure_width), float(args.figure_height)), dpi=int(args.dpi)
     )
-    gs = fig.add_gridspec(nrows=1, ncols=2, width_ratios=[1.5, 0.7], wspace=0.01)
+    gs = fig.add_gridspec(nrows=1, ncols=2, width_ratios=[1.5, 0.7], wspace=0.2)
     ax_surface = fig.add_subplot(gs[0, 0])
     ax_bar = fig.add_subplot(gs[0, 1])
 

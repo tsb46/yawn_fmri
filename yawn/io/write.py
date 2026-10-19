@@ -14,7 +14,7 @@ from nibabel.gifti.gifti import (
     GiftiLabelTable,
 )
 
-from scan.io.load import Gifti
+from yawn.io.load import Gifti
 
 
 def write_func_gii(data: np.ndarray, gii_params: Gifti, fp_out: str) -> None:

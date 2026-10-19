@@ -14,14 +14,14 @@ import neurokit2 as nk
 import numpy as np
 from tedana.workflows import tedana_workflow
 
-from scan import utils
-from scan.io.file import Participant
-from scan.preprocess import dataset as ds
-from scan.preprocess import freesurfer as fs
-from scan.preprocess import fsl, physio
-from scan.preprocess import workbench as wb
-from scan.preprocess.custom import trim_cifti
-from scan.preprocess.fsl import load_fsl_motion_params
+from yawn import utils
+from yawn.io.file import Participant
+from yawn.preprocess import dataset as ds
+from yawn.preprocess import freesurfer as fs
+from yawn.preprocess import fsl, physio
+from yawn.preprocess import workbench as wb
+from yawn.preprocess.custom import trim_cifti
+from yawn.preprocess.fsl import load_fsl_motion_params
 
 
 class AnatPipeOutMisc(Enum):
@@ -628,7 +628,7 @@ class Pipeline:
     """
     Master pipeline for orchestrating preprocessing of functional,
     anatomical (T1w), physiological and EEG data.
-    Dataset specific parameters are set in scan/meta/params.json.
+    Dataset specific parameters are set in yawn/meta/params.json.
 
     Attributes
     ----------
@@ -666,7 +666,7 @@ class Pipeline:
     ):
         self.dataset = dataset
         # dataset specific parameters
-        with open("scan/meta/params.json", "rb") as f:
+        with open("yawn/meta/params.json", "rb") as f:
             self.params = json.load(f)[dataset]
         self.multiecho = self.params["multiecho"]
         # if multiecho, get echos
@@ -827,7 +827,7 @@ class AnatomicalPipeline:
         subject label
     params: dict
         dictionary containing dataset specific
-        preprocessing parameters from scan/meta/params.json
+        preprocessing parameters from yawn/meta/params.json
     fmap: dict
         dictionary containing output file paths
     reconall_skip: bool
@@ -904,7 +904,7 @@ class FunctionalPipelineFull:
         session label
     params: dict
         dictionary containing dataset specific
-        preprocessing parameters from scan/meta/params.json
+        preprocessing parameters from yawn/meta/params.json
     fmap: dict
         dictionary containing output file paths
 
@@ -1115,7 +1115,7 @@ class FunctionalPipelineCiftiPartial:
         session label
     params: dict
         dictionary containing dataset specific
-        preprocessing parameters from scan/meta/params.json
+        preprocessing parameters from yawn/meta/params.json
     fmap: dict
         dictionary containing output file paths
 
@@ -1190,7 +1190,7 @@ class PhysioPipeline:
         session label
     params: dict
         dictionary containing dataset specific
-        preprocessing parameters from scan/meta/params.json
+        preprocessing parameters from yawn/meta/params.json
     fmap: dict
         dictionary containing output file paths
     plot_physio: bool

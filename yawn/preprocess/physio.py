@@ -10,7 +10,7 @@ import scipy
 from neurokit2.rsp.rsp_rvt import _rsp_rvt_find_min
 from scipy.ndimage import gaussian_filter1d
 
-from scan.preprocess.custom import framewise_displacement
+from yawn.preprocess.custom import framewise_displacement
 
 
 def extract_eog_features(ts: np.ndarray, sf: int) -> dict[str, np.ndarray]:

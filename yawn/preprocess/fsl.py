@@ -8,7 +8,7 @@ import numpy as np
 
 from nipype.interfaces import fsl
 
-from scan import utils
+from yawn import utils
 
 # Ensure output is .nii.gz
 fsl.FSLCommand.set_default_output_type("NIFTI_GZ")

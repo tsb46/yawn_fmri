@@ -14,10 +14,10 @@ from nibabel.loadsave import load as nib_load
 from nilearn import plotting
 import numpy as np
 
-from scan.plots.layout import add_colorbar
-from scan.plots.layout import annotate_time
-from scan.plots.layout import build_side_axes
-from scan.plots.layout import draw_label_legend
+from yawn.plots.layout import add_colorbar
+from yawn.plots.layout import annotate_time
+from yawn.plots.layout import build_side_axes
+from yawn.plots.layout import draw_label_legend
 
 
 class FrameMapSource(Protocol):

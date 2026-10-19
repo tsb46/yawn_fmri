@@ -15,9 +15,9 @@ from typing import List, Tuple
 
 import numpy as np
 
-from scan.io.load import DatasetLoad, DatasetOutput, DatasetOutputConcat, Gifti
-from scan.model.fc import FCMapModel
-from scan.model.glm import GLMSpline
+from yawn.io.load import DatasetLoad, DatasetOutput, DatasetOutputConcat, Gifti
+from yawn.model.fc import FCMapModel
+from yawn.model.glm import GLMSpline
 
 # OUTPUT DIRECTORY
 OUT_DIRECTORY = "results/main"

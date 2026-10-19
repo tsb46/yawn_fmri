@@ -21,13 +21,13 @@ uv sync --extra viz --extra templates
 
 The functional/anatomical preprocessing also calls external neuroimaging tools that must be on your `PATH`: FSL (`bet`, `mcflirt`, `slicetimer`), FreeSurfer (`recon-all`, `bbregister`, `mri_vol2surf`) and Connectome Workbench (`wb_command`). Multi-echo denoising uses `tedana` (installed by `uv sync`).
 
-**All commands below should be run from the repository root**, since paths (e.g. `scan/meta/params.json`, `template/`, `results/`) are relative.
+**All commands below should be run from the repository root**, since paths (e.g. `yawn/meta/params.json`, `template/`, `results/`) are relative.
 
 # Repository Layout
 
 ```
 main.py            CLI for the group-level analyses (GLM of yawn/sigh events, seed-based FC)
-scan/
+yawn/
   meta/            dataset metadata: params.json, participant list, slice order
   preprocess/      preprocessing pipelines (anatomical, functional, physio)
   io/              loading preprocessed data for analysis, writing GIFTI outputs
@@ -43,11 +43,11 @@ results/           analysis outputs (results/main) and figures (results/figures)
 
 # Running the Repository
 
-The workflow is: (1) preprocess the raw data, (2) load the preprocessed data, (3) run the analyses with `main.py`, (4) plot the results, (5) optionally run the miscellaneous scripts.
+The workflow is: (1) preprocess the raw data, (2) run the analyses with `main.py`, (3) plot the results.
 
-## 1. Preprocessing (`scan/preprocess`)
+## 1. Preprocessing (`yawn/preprocess`)
 
-Preprocessing is orchestrated by `Pipeline` in `scan/preprocess/pipeline.py`. Dataset-specific settings (directories, file naming, TR, number of trimmed volumes, echo times, smoothing, physio signals to extract) are defined in `scan/meta/params.json`. The subjects/sessions to process are listed in `scan/meta/vanderbilt_participant.csv`.
+Preprocessing is orchestrated by `Pipeline` in `yawn/preprocess/pipeline.py`. Dataset-specific settings (directories, file naming, TR, number of trimmed volumes, echo times, smoothing, physio signals to extract) are defined in `yawn/meta/params.json`. The subjects/sessions to process are listed in `yawn/meta/vanderbilt_participant.csv`.
 
 Place raw data in the following layout (file names are set by `file_format` in `params.json`):
 ```
@@ -58,7 +58,7 @@ data/vanderbilt/physio/raw/     respiratory belt, EEG (EOG/EMG), motion paramete
 
 Run the pipeline from Python:
 ```python
-from scan.preprocess.pipeline import Pipeline
+from yawn.preprocess.pipeline import Pipeline
 
 pipe = Pipeline(dataset="vanderbilt")
 pipe.run()                   # sequential
@@ -81,7 +81,7 @@ The pipeline is composed of three sub-pipelines:
 
 Helper modules: `freesurfer.py`, `fsl.py`, `workbench.py` (wrappers around the external tools), `physio.py` (feature extraction), `dataset.py` (dataset-specific physio/EEG loading) and `custom.py` (framewise displacement, CIFTI trimming).
 
-## 2. Analyses (`scan/model` and `main.py`)
+## 2. Analyses (`yawn/model` and `main.py`)
 
 `main.py` is the command-line entry point for the group-level analyses:
 ```
@@ -90,8 +90,8 @@ python main.py --analysis {fc,resp-events} [--out_dir results/main]
 
 | Analysis | Description | Model | Outputs (in `--out_dir`) |
 |---|---|---|---|
-| `resp-events` | Models the fMRI response to manually annotated yawn and sigh events separately, per scan (spline-based finite impulse response). | `scan.model.glm.GLMSpline` | `vanderbilt_glm_{yawn,sigh}.pkl` and `vanderbilt_glm_{yawn,sigh}_{lh,rh}.func.gii` |
-| `fc` | Seed-based functional connectivity. Seeds are the SCAN, foot, hand and mouth effector ROIs (`template/*.label.gii`) averaged across hemispheres; maps are computed on globally-regressed, session-concatenated data. | `scan.model.fc.FCMapModel` | `vanderbilt_fc_map_{SCAN,FOOT,HAND,MOUTH}_roi.pkl` and `..._{lh,rh}.func.gii` |
+| `resp-events` | Models the fMRI response to manually annotated yawn and sigh events separately, per scan (spline-based finite impulse response). | `yawn.model.glm.GLMSpline` | `vanderbilt_glm_{yawn,sigh}.pkl` and `vanderbilt_glm_{yawn,sigh}_{lh,rh}.func.gii` |
+| `fc` | Seed-based functional connectivity. Seeds are the yawn, foot, hand and mouth effector ROIs (`template/*.label.gii`) averaged across hemispheres; maps are computed on globally-regressed, session-concatenated data. | `yawn.model.fc.FCMapModel` | `vanderbilt_fc_map_{SCAN,FOOT,HAND,MOUTH}_roi.pkl` and `..._{lh,rh}.func.gii` |
 
 Examples:
 ```
@@ -99,28 +99,20 @@ python main.py -a resp-events
 python main.py -a fc -o results/main
 ```
 
-## 3. Plots (`scan/plots` and `plots/`)
+## 3. Plots (`yawn/plots` and `plots/`)
 
-`scan/plots` provides reusable plotting code (importable from `scan.plots`):
-
-- `snapshot.py`: `build_snapshot_plotter(...)` builds a `SurfaceSnapshotPlotter` for fs_LR surface snapshots from `.func.gii` (or CIFTI) inputs, with optional ROI/label contours (`roi_left`, `roi_right`, `label_*`), atlas overlays (`atlas="gordon"` or `"yeo"`, `atlas_label_index`), colour scaling (`vmin`, `vmax`, `auto_percentiles`, `threshold`) and camera settings (`surf_views`, `surf_zoom`, `surf_elev_*`, `surf_azim_*`). Call `render_figure()` for a standalone figure, or `render_into_axes(axes=[...])` to draw into axes of a larger matplotlib layout.
-- `surface.py`: low-level surface rendering (`render_surface_figure`, `SurfaceOverlay`, `SurfaceRenderOptions`).
-- `network_summary.py`: `plot_network_summary` for network-level bar summaries.
-- `timecourse.py` / `timecourse_dash.py`: interactive Plotly time series plots (`plot_timeseries`) and a Dash app for annotating events (`create_timecourse_annotation_app`, requires the `viz` extra).
-- `layout.py`, `utils.py`: legends, colorbars and layout helpers.
-
-The notebooks in `plots/` use these modules to generate the figures. Run them from Jupyter/VS Code with the repository root as the working directory (or the relative paths to `results/` and `template/` will not resolve), after running the analyses in step 3:
+The notebooks in `plots/` use these modules to generate the figures displayed in the manuscript. Run them from Jupyter/VS Code with the repository root as the working directory (or the relative paths to `results/` and `template/` will not resolve), after running the analyses in step 2:
 
 | Notebook | Description |
 |---|---|
-| `plots/physio_scan.ipynb` | Reads the GLM outputs in `results/main/vanderbilt_glm_{yawn,sigh}*` and uses `build_snapshot_plotter` to render the predicted fMRI response on the cortical surface at a selected lag, with SCAN ROI contours and Gordon-atlas cingulo-opercular/salience network outlines, combined into a multi-panel figure. |
-| `plots/resp_event_physio.ipynb` | Uses `DatasetLoad` to load fMRI and physio (native 10 Hz respiratory/EOG/EMG; TR-sampled head motion and global signal), then computes bootstrapped (subject-level) event-aligned averages around yawn/sigh events. |
+| `plots/resp_event_fmri.ipynb` | Reads the GLM outputs in `results/main/vanderbilt_glm_{yawn,sigh}*` and renders predicted fMRI response on the cortical surface at a selected lag, with SCAN ROI contours and Gordon-atlas cingulo-opercular/salience network outlines, combined into a multi-panel figure. |
+| `plots/resp_event_physio.ipynb` | Loads fMRI and physio (native 10 Hz respiratory/EOG/EMG; TR-sampled head motion and global signal), then computes bootstrapped event-aligned averages around yawn/sigh events. |
 
 ## Scripts (`scripts/`)
 
 Standalone scripts that are not part of the main analysis flow:
 
-- `scripts/gordon18_to_scan_roi.py`: builds the SCAN, foot, hand and mouth ROI label files in `template/` from the Gordon18 atlas (`.mgh` in fsaverage6): converts to GIFTI, transforms to fs_LR 32k with `neuromaps`, and splits the SCAN ROI into top/middle/bottom. Requires the `templates` extra and the Gordon18 `.mgh` files in `template/` (download from https://github.com/pBFSLab/UNITE). Paths are relative to `scripts/`, so run it from there:
+- `scripts/gordon18_to_scan_roi.py`: builds the SCAN, foot, hand and mouth ROI label files in `template/` from the Gordon18 atlas (`.mgh` in fsaverage6): converts to GIFTI, transforms to fs_LR 32k with `neuromaps`, and splits the SCAN ROI into top/middle/bottom. Requires the Python packages specified in the `templates` extra dependency group (see `pyproject.toml`) and the Gordon18 `.mgh` files in `template/` (download from https://github.com/pBFSLab/UNITE). Paths are relative to `scripts/`, so run it from there:
   ```
   cd scripts && python gordon18_to_scan_roi.py
   ```
@@ -139,10 +131,11 @@ Standalone scripts that are not part of the main analysis flow:
   ```
   Run `python scripts/figure2b_panel_b.py --help` for the remaining options (colormap, scaling, network order/exclusion, figure size).
 
+# Other functionality
 
-## Loading the dataset (`scan/io`)
+## Loading the dataset (`yawn/io`)
 
-`scan/io` loads the preprocessed outputs for analysis:
+`yawn/io` loads the preprocessed outputs for analysis:
 
 - `file.py`: `Participant` iterates over the subjects/sessions in the participant list and builds file paths.
 - `load.py`: `DatasetLoad` loads fMRI (`proc6_surfacelr`), physio (`proc1_physio`) and the annotated yawn/sigh events (`events/subject-XX_session-YY.json`). `Gifti` handles left/right hemisphere concatenation/splitting (optionally excluding the medial wall).
@@ -150,7 +143,7 @@ Standalone scripts that are not part of the main analysis flow:
 - `utils.py`: ROI mask checks and filtering helpers.
 
 ```python
-from scan.io.load import DatasetLoad
+from yawn.io.load import DatasetLoad
 
 loader = DatasetLoad("vanderbilt")   # all subjects/sessions; or pass subj_ses_select=[("02", "01"), ...]
 data, gii = loader.load(
@@ -170,7 +163,51 @@ data = data.concatenate()   # concatenate across scans
 To extract ROI time courses instead of vertex-wise data, pass `input_mask=True` with `lh_roi_masks` / `rh_roi_masks` (lists of fs_LR `.label.gii` files from `template/`) and optionally `roi_avg_left_right=True`.
 
 
+## Annotation of Yawns and Sighs
 
+Events were marked manually with a small [Dash](https://dash.plotly.com/) app in `yawn/plots/timecourse_dash.py`. It plots a multi-channel time course (e.g. respiration, EOG, EMG); clicking the trace drops a vertical marker at the nearest sample, stamped with the label chosen in the dropdown. Markers can be undone or cleared, and the session is saved as JSON (see [events/README.md](events/README.md) for the format).
+
+Install the optional dependency (`pip install -e ".[viz]"`), then pass the data as an array or DataFrame (samples x channels). Example usage:
+
+```python
+  import pandas pd
+  import numpy as np
+
+  from yawn.io.load import DatasetLoad
+  from yawn.plots import run_timecourse_annotation_app
+  subj, ses = '05', '01'
+  loader = DatasetLoad(dataset="vanderbilt", subj_ses_select=[(subj, ses)])
+  data, _ = loader.load(data_type="physio", norm=None)
+
+  selected_ts = [
+      "eog1_hf_amp",
+      "emg3_hf_amp",
+      "resp_amp",
+      "resp_if",
+      "resp_filt",
+      "fd",
+      "weight",
+  ]
+
+  df_physio = pd.DataFrame(
+      {k: np.squeeze(v[0]) for k, v in data.physio.items() if k in selected_ts}
+  )
+  time = np.arange(len(df_physio)) * (
+      1 / 10
+  )  # Assuming a sampling rate of 10 Hz for the physiological data
+
+  run_timecourse_annotation_app(
+      df_physio,                                # DataFrame or (samples x channels) array
+      column_labels=selected_ts,     # optional; defaults to DataFrame columns
+      time=time,                              # optional time axis in seconds (10 Hz physio)
+      source_name="subject-05_session-01",      # plot title and "source_name" in the JSON
+      labels=["Yawn", "Sigh"],                  # enables the label dropdown
+      scale_mode="zscore",                      # "none", "zscore" or "minmax"
+      default_output_path="events/subject-05_session-01.json",
+  )
+```
+
+This starts a local server (default http://127.0.0.1:8050). Click to add markers, then press "Save JSON" to write to the path in the text box.
 
 
 
